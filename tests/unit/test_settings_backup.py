@@ -41,6 +41,8 @@ def test_build_backup_payload_skips_action_settings_and_scrubs_sensitive_data(
         <setting id='jackett_apikey' type='string'><default /></setting>
         <setting id='stremio_email' type='string'><default /></setting>
         <setting id='is_trakt_auth' type='boolean'><default>false</default></setting>
+        <setting id='simkl_access_token' type='string'><default /></setting>
+        <setting id='simkl_authenticated' type='boolean'><default>false</default></setting>
         <setting id='some_action' type='action' />
       </group>
     </category>
@@ -51,6 +53,8 @@ def test_build_backup_payload_skips_action_settings_and_scrubs_sensitive_data(
         "jackett_apikey": "secret",
         "stremio_email": "user@example.com",
         "is_trakt_auth": "true",
+        "simkl_access_token": "simkl-token",
+        "simkl_authenticated": "true",
     }
 
     monkeypatch.setattr(
@@ -81,6 +85,41 @@ def test_build_backup_payload_skips_action_settings_and_scrubs_sensitive_data(
     assert payload["custom_stremio_addons_included"] is False
 
 
+def test_backup_scrubs_nuvio_session_and_profile_selection(monkeypatch, tmp_path):
+    settings_path = _write_settings_xml(
+        tmp_path,
+        """
+    <category id='general'>
+      <group id='backup'>
+        <setting id='safe_value' type='string'><default /></setting>
+        <setting id='nuvio_access_token' type='string'><default /></setting>
+        <setting id='nuvio_refresh_token' type='string'><default /></setting>
+        <setting id='nuvio_expires_at' type='string'><default /></setting>
+        <setting id='nuvio_authenticated' type='boolean'><default>false</default></setting>
+        <setting id='nuvio_profile_id' type='string'><default /></setting>
+      </group>
+    </category>
+    """,
+    )
+    values = {
+        "safe_value": "safe",
+        "nuvio_access_token": "access",
+        "nuvio_refresh_token": "refresh",
+        "nuvio_expires_at": "123",
+        "nuvio_authenticated": "true",
+        "nuvio_profile_id": "2",
+    }
+    monkeypatch.setattr(settings_backup.ADDON, "getSetting", values.get)
+    monkeypatch.setattr(settings_backup, "cache", FakeCache())
+    monkeypatch.setattr(settings_backup, "get_cached_setting_property", lambda _setting_id: "")
+
+    payload = settings_backup.build_backup_payload(
+        strip_sensitive=True, settings_xml_path=settings_path
+    )
+
+    assert payload["settings"] == {"safe_value": "safe"}
+
+
 def test_build_backup_payload_includes_custom_stremio_addons(monkeypatch, tmp_path):
     settings_path = _write_settings_xml(
         tmp_path,
@@ -102,7 +141,7 @@ def test_build_backup_payload_includes_custom_stremio_addons(monkeypatch, tmp_pa
         "transportName": "stremio-account",
         "transportUrl": "https://account.example/manifest.json",
     }
-    custom_key = "custom.one|https://example.com"
+    custom_key = settings_backup.build_addon_instance_key(custom_addon)
     fake_cache = FakeCache(
         {
             settings_backup.STREMIO_USER_ADDONS: [custom_addon, another_addon],
@@ -176,7 +215,7 @@ def test_apply_backup_payload_replaces_custom_stremio_addons(monkeypatch, tmp_pa
         "transportUrl": "https://account.example/manifest.json",
     }
     old_key = "custom.old|https://old.example"
-    new_key = "custom.new|https://new.example"
+    new_key = settings_backup.build_addon_instance_key(new_custom)
     account_key = "account.one|https://account.example"
     fake_cache = FakeCache(
         {
@@ -229,21 +268,23 @@ def test_apply_backup_payload_replaces_custom_stremio_addons(monkeypatch, tmp_pa
     assert ("trakt_token", "tok") in property_calls
     assert ("trakt_refresh", "ref") in property_calls
     assert ("trakt_expires", "123") in property_calls
-    assert fake_cache.store[settings_backup.STREMIO_USER_ADDONS] == [account_addon, new_custom]
+    assert fake_cache.store[settings_backup.STREMIO_USER_ADDONS] == [
+        account_addon,
+        new_custom,
+    ]
     assert settings_backup.decode_selected_ids(
         fake_cache.store[settings_backup.STREMIO_ADDONS_KEY]
     ) == [account_key, new_key]
     assert settings_backup.decode_selected_ids(
         fake_cache.store[settings_backup.STREMIO_ADDONS_CATALOGS_KEY]
     ) == [new_key]
-    assert settings_backup.decode_selected_ids(
-        fake_cache.store[settings_backup.STREMIO_TV_ADDONS_KEY]
-    ) == []
+    assert (
+        settings_backup.decode_selected_ids(fake_cache.store[settings_backup.STREMIO_TV_ADDONS_KEY])
+        == []
+    )
 
 
-def test_apply_backup_payload_clears_scrubbed_fields_and_custom_addons(
-    monkeypatch, tmp_path
-):
+def test_apply_backup_payload_clears_scrubbed_fields_and_custom_addons(monkeypatch, tmp_path):
     settings_path = _write_settings_xml(
         tmp_path,
         """
@@ -319,14 +360,15 @@ def test_apply_backup_payload_clears_scrubbed_fields_and_custom_addons(
     assert settings_backup.decode_selected_ids(
         fake_cache.store[settings_backup.STREMIO_ADDONS_KEY]
     ) == [account_key]
-    assert settings_backup.decode_selected_ids(
-        fake_cache.store[settings_backup.STREMIO_ADDONS_CATALOGS_KEY]
-    ) == []
+    assert (
+        settings_backup.decode_selected_ids(
+            fake_cache.store[settings_backup.STREMIO_ADDONS_CATALOGS_KEY]
+        )
+        == []
+    )
 
 
-def test_reset_all_settings_restores_defaults_and_clears_custom_addons(
-    monkeypatch, tmp_path
-):
+def test_reset_all_settings_restores_defaults_and_clears_custom_addons(monkeypatch, tmp_path):
     settings_path = _write_settings_xml(
         tmp_path,
         """
@@ -390,9 +432,12 @@ def test_reset_all_settings_restores_defaults_and_clears_custom_addons(
     assert settings_backup.decode_selected_ids(
         fake_cache.store[settings_backup.STREMIO_ADDONS_KEY]
     ) == [account_key]
-    assert settings_backup.decode_selected_ids(
-        fake_cache.store[settings_backup.STREMIO_ADDONS_CATALOGS_KEY]
-    ) == []
+    assert (
+        settings_backup.decode_selected_ids(
+            fake_cache.store[settings_backup.STREMIO_ADDONS_CATALOGS_KEY]
+        )
+        == []
+    )
 
 
 def test_factory_reset_clears_settings_caches_and_local_database(monkeypatch, tmp_path):
@@ -435,11 +480,19 @@ def test_factory_reset_clears_settings_caches_and_local_database(monkeypatch, tm
         lambda setting_id, value: property_calls.append((setting_id, value)),
     )
     monkeypatch.setattr(settings_backup, "clear_all_cache", lambda: helper_calls.append("all"))
-    monkeypatch.setattr(settings_backup, "clear_trakt_db_cache", lambda: helper_calls.append("trakt"))
+    monkeypatch.setattr(
+        settings_backup, "clear_trakt_db_cache", lambda: helper_calls.append("trakt")
+    )
     monkeypatch.setattr(settings_backup, "clear_tmdb_cache", lambda: helper_calls.append("tmdb"))
-    monkeypatch.setattr(settings_backup, "clear_stremio_cache", lambda: helper_calls.append("stremio"))
-    monkeypatch.setattr(settings_backup, "clear_debrid_cache", lambda: helper_calls.append("debrid"))
-    monkeypatch.setattr(settings_backup, "clear_mdblist_cache", lambda: helper_calls.append("mdblist"))
+    monkeypatch.setattr(
+        settings_backup, "clear_stremio_cache", lambda: helper_calls.append("stremio")
+    )
+    monkeypatch.setattr(
+        settings_backup, "clear_debrid_cache", lambda: helper_calls.append("debrid")
+    )
+    monkeypatch.setattr(
+        settings_backup, "clear_mdblist_cache", lambda: helper_calls.append("mdblist")
+    )
     monkeypatch.setattr(settings_backup, "PickleDatabase", lambda: fake_pickle_db)
 
     settings_backup.factory_reset(settings_xml_path=settings_path)

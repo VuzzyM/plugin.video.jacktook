@@ -1,31 +1,29 @@
-from datetime import datetime, date, timedelta
-from copy import copy
 import os
 import re
+from copy import copy
+from datetime import date, datetime, timedelta
+from urllib.parse import quote
 
 from lib.clients.tmdb.utils.utils import tmdb_get
 from lib.db.pickle_db import PickleDatabase
 from lib.jacktook.utils import kodilog
-from lib.utils.kodi.utils import (
-    ADDON_HANDLE,
-    ADDON_PATH,
-    add_directory_items_batch,
-    apply_section_view,
-    build_url,
-    end_of_directory,
-    translation,
-    kodi_play_media,
-    make_list_item,
-)
 from lib.utils.general.utils import (
     execute_thread_pool,
     set_media_infoTag,
     set_pluging_category,
     translate_weekday,
 )
-from lib.utils.kodi.utils import get_setting
-
-
+from lib.utils.kodi.utils import (
+    ADDON_PATH,
+    add_directory_items_batch,
+    apply_section_view,
+    build_url,
+    end_of_directory,
+    get_setting,
+    kodi_play_media,
+    make_list_item,
+    translation,
+)
 
 
 def show_weekly_calendar(library=False):
@@ -36,9 +34,7 @@ def show_weekly_calendar(library=False):
     else:
         source_dict = PickleDatabase().get_key("jt:lth")
 
-    tv_shows = [
-        (title, data) for title, data in source_dict.items() if data.get("mode") == "tv"
-    ]
+    tv_shows = [(title, data) for title, data in source_dict.items() if data.get("mode") == "tv"]
 
     results = []
 
@@ -50,9 +46,11 @@ def show_weekly_calendar(library=False):
     def calculate_adjusted_broadcast(date_str, offset_hours):
         """
         Calculates an adjusted date and time based on a manual hour offset.
+
         Assumes the original air time is midnight (00:00).
         """
         if not date_str:
+
             return None, None
 
         try:
@@ -98,9 +96,7 @@ def show_weekly_calendar(library=False):
     date_item = make_list_item(
         label=f"[UPPERCASE][COLOR=orange]Today: {current_date}[/COLOR][/UPPERCASE]"
     )
-    date_item.setArt(
-        {"icon": os.path.join(ADDON_PATH, "resources", "img", "history.png")}
-    )
+    date_item.setArt({"icon": os.path.join(ADDON_PATH, "resources", "img", "history.png")})
     directory_items.append(("", date_item, False))
 
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -132,7 +128,7 @@ def show_weekly_calendar(library=False):
                 ids["tvdb_id"] = external_ids.get("tvdb_id")
 
         tv_data = {
-            "name": ep_name or title,
+            "name": quote(ep_name or title),
             "episode": ep["number"],
             "season": ep["season"],
         }
@@ -144,9 +140,7 @@ def show_weekly_calendar(library=False):
 
         # Mark if episode is released today
         is_today = ep["air_date"] == today_str
-        mark = (
-            f"[UPPERCASE][COLOR=orange]TODAY- [/COLOR][/UPPERCASE]" if is_today else ""
-        )
+        mark = "[UPPERCASE][COLOR=orange]TODAY- [/COLOR][/UPPERCASE]" if is_today else ""
 
         ep_title = f"{mark}{weekday_name_translated} - ({ep['air_date']} {ep.get('air_time', '00:00')}) - {title} - S{ep['season']:02}E{ep['number']:02}"
 
@@ -201,18 +195,16 @@ def get_episodes_for_show(ids):
 
     try:
         show_details = tmdb_get("tv_details", tmdb_id)
-        seasons = getattr(show_details, "seasons")
+        seasons = show_details.seasons
         seasons = [s for s in seasons if s.get("season_number", 0) > 0]
         if not seasons:
             return [], show_details
         latest_season = max(seasons, key=lambda s: s.get("season_number", 0))
         season_number = latest_season.get("season_number")
-        season_details = tmdb_get(
-            "season_details", {"id": tmdb_id, "season": season_number}
-        )
+        season_details = tmdb_get("season_details", {"id": tmdb_id, "season": season_number})
 
         episodes = []
-        for ep in getattr(season_details, "episodes"):
+        for ep in season_details.episodes:
             air_date = ep.get("air_date")
             if air_date:
                 episodes.append(
@@ -232,18 +224,20 @@ def get_episodes_for_show(ids):
 def is_this_week(date_str):
     """Check if the date_str (YYYY-MM-DD) is in the current week."""
     try:
+
         d = parse_date_str(date_str)
         today = date.today()
         year, week, _ = today.isocalendar()
         d_year, d_week, _ = d.isocalendar()
         return (d_year, d_week) == (year, week)
     except Exception as e:
-        kodilog(f"Error: {str(e)}")
+        kodilog(f"Error: {e!s}")
 
 
 def parse_date_str(date_str: str) -> date:
     """Parse a date string (YYYY-MM-DD or similar) into a date object without using datetime.strptime."""
     date_str_cleaned = date_str.strip().split("T")[0]
+
     match = re.search(r"(\d{4})[\-\/]?(\d{1,2})[\-\/]?(\d{1,2})", date_str_cleaned)
     if match:
         year, month, day = map(int, match.groups())

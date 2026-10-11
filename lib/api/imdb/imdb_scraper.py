@@ -1,11 +1,11 @@
-import re
-import json
-import requests
 import html
+import re
 from datetime import timedelta
-from lib.utils.kodi.utils import kodilog
-from lib.db.cached import cache
 
+import requests
+
+from lib.db.cached import cache
+from lib.utils.kodi.utils import kodilog
 
 GQL_URL = "https://graphql.imdb.com/"
 GQL_HEADERS = {
@@ -33,9 +33,11 @@ def _clean(text):
 def get_imdb_extras(imdb_id):
     """
     Fetch IMDb extras (reviews, trivia, goofs, parental guide) via GraphQL.
+
     Returns a dict with keys: reviews, trivia, blunders, parentsguide.
     """
     if not imdb_id:
+
         return {"reviews": [], "trivia": [], "blunders": [], "parentsguide": []}
 
     cache_key = f"imdb_extras_gql_{imdb_id}"
@@ -67,21 +69,15 @@ def get_imdb_extras(imdb_id):
                     spoiler = edge["node"].get("spoiler", False)
                     rating = edge["node"].get("authorRating")
                     rating_str = str(rating) if rating is not None else "-"
-                    title = (
-                        edge["node"].get("summary", {}).get("originalText", "-----")
-                    )
+                    title = edge["node"].get("summary", {}).get("originalText", "-----")
                     date = edge["node"].get("submissionDate", "-----")
-                    review_text = f"[B]%02d. [I]%s/10 - %s - %s[/I][/B][CR][CR]%s" % (
-                        count,
-                        rating_str,
-                        date,
-                        title,
-                        content,
+                    review_text = (
+                        f"[B]{count:02d}. [I]{rating_str}/10 - {date} - {title}[/I][/B]"
+                        f"[CR][CR]{content}"
                     )
                     if spoiler:
                         review_text = (
-                            "[B][COLOR red][CONTAINS SPOILERS][/COLOR][CR][/B]"
-                            + review_text
+                            "[B][COLOR red][CONTAINS SPOILERS][/COLOR][CR][/B]" + review_text
                         )
                     count += 1
                     reviews.append(review_text)
@@ -100,11 +96,9 @@ def get_imdb_extras(imdb_id):
             ):
                 try:
                     content = html.unescape(
-                        _clean(
-                            edge["node"]["displayableArticle"]["body"]["plaidHtml"]
-                        )
+                        _clean(edge["node"]["displayableArticle"]["body"]["plaidHtml"])
                     )
-                    trivia.append(f"[B]TRIVIA %02d.[/B][CR][CR]%s" % (count, content))
+                    trivia.append(f"[B]TRIVIA {count:02d}.[/B][CR][CR]{content}")
                     count += 1
                 except Exception:
                     pass
@@ -121,13 +115,9 @@ def get_imdb_extras(imdb_id):
             ):
                 try:
                     content = html.unescape(
-                        _clean(
-                            edge["node"]["displayableArticle"]["body"]["plaidHtml"]
-                        )
+                        _clean(edge["node"]["displayableArticle"]["body"]["plaidHtml"])
                     )
-                    blunders.append(
-                        f"[B]BLUNDERS %02d.[/B][CR][CR]%s" % (count, content)
-                    )
+                    blunders.append(f"[B]BLUNDERS {count:02d}.[/B][CR][CR]{content}")
                     count += 1
                 except Exception:
                     pass
@@ -153,9 +143,7 @@ def get_imdb_extras(imdb_id):
                             html.unescape(_clean(x["node"]["text"]["plaidHtml"]))
                             for x in category["guideItems"]["edges"]
                         ]
-                        content = "\n\n".join(
-                            ["%02d. %s" % (c, i) for c, i in enumerate(listings, 1)]
-                        )
+                        content = "\n\n".join([f"{c:02d}. {i}" for c, i in enumerate(listings, 1)])
                     except Exception:
                         listings = []
                         content = ""
@@ -190,9 +178,11 @@ def get_imdb_extras(imdb_id):
 def get_imdb_more_like_this(imdb_id):
     """
     Fetch "More Like This" titles from IMDb via GraphQL.
+
     Returns a list of IMDb IDs (tt...).
     """
     if not imdb_id:
+
         return []
 
     cache_key = f"imdb_more_like_this_{imdb_id}"
@@ -202,7 +192,7 @@ def get_imdb_more_like_this(imdb_id):
 
     try:
         payload = {
-            "query": 'query($id:ID!){title(id:$id){moreLikeThisTitles(first:12){edges{node{id}}}}}',
+            "query": "query($id:ID!){title(id:$id){moreLikeThisTitles(first:12){edges{node{id}}}}}",
             "variables": {"id": imdb_id},
         }
         response = requests.post(GQL_URL, json=payload, headers=GQL_HEADERS, timeout=10)
@@ -232,6 +222,7 @@ def get_imdb_goofs(imdb_id):
 def get_imdb_parentsguide(imdb_id):
     """Legacy wrapper. Use get_imdb_extras() for new code."""
     extras = get_imdb_extras(imdb_id)
+
     guide = extras.get("parentsguide", [])
     # Convert to legacy text format for compatibility
     result = []

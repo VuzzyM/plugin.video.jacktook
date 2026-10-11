@@ -1,21 +1,21 @@
-# -*- coding: utf-8 -*-
 import ast
+import contextlib
 import os
-import time
 import sqlite3 as database
+import time
+
+import xbmcaddon
+from xbmcvfs import translatePath
+
 from lib.utils.kodi.utils import (
+    clear_property,
     delete_file,
     dialog_ok,
     get_property,
     notification,
     set_property,
-    clear_property,
     translation,
 )
-
-import xbmcaddon
-from xbmcvfs import translatePath
-
 
 userdata_path = translatePath(xbmcaddon.Addon().getAddonInfo("profile"))
 databases_path = os.path.join(userdata_path, "databases/")
@@ -50,9 +50,7 @@ table_creators = {
 last_played text, resume_id integer, title text, unique (db_type, media_id, season, episode))",
         "CREATE TABLE IF NOT EXISTS watched_status (db_type text not null, media_id text not null, status text, unique (db_type, media_id))",
     ),
-    "lists_db": (
-        "CREATE TABLE IF NOT EXISTS lists (id text unique, data text, expires integer)",
-    ),
+    "lists_db": ("CREATE TABLE IF NOT EXISTS lists (id text unique, data text, expires integer)",),
     "maincache_db": (
         "CREATE TABLE IF NOT EXISTS maincache (id text unique, data text, expires integer)",
     ),
@@ -108,13 +106,11 @@ def check_databases_integrity():
             dbcon = database.connect(database_location)
             for db_table in tables:
                 dbcon.execute(command_base % db_table)
-        except:
+        except Exception:
             database_errors.append(database_name)
             if os.path.exists(database_location):
-                try:
+                with contextlib.suppress(BaseException):
                     dbcon.close()
-                except:
-                    pass
                 delete_file(database_location)
 
     command_base = "SELECT * FROM %s LIMIT 1"
@@ -125,14 +121,13 @@ def check_databases_integrity():
     if database_errors:
         dialog_ok(
             heading=translation(90432),
-            line1=translation(90433)
-            % ", ".join(database_errors),
+            line1=translation(90433) % ", ".join(database_errors),
         )
     else:
         notification(translation(90426), time=3000)
 
 
-class BaseCache(object):
+class BaseCache:
     def __init__(self, dbfile, table):
         self.table = table
         self.dbfile = dbfile
@@ -151,7 +146,7 @@ class BaseCache(object):
                         self.set_memory_cache(result, string, cache_data[0])
                     else:
                         self.delete(string)
-        except:
+        except Exception:
             pass
         return result
 
@@ -159,11 +154,9 @@ class BaseCache(object):
         try:
             dbcon = connect_database(self.dbfile)
             expires = get_timestamp(expiration)
-            dbcon.execute(
-                BASE_SET % self.table, (string, self._serialize(data), int(expires))
-            )
+            dbcon.execute(BASE_SET % self.table, (string, self._serialize(data), int(expires)))
             self.set_memory_cache(data, string, int(expires))
-        except:
+        except Exception:
             return None
 
     def get_memory_cache(self, string, current_time):
@@ -174,7 +167,7 @@ class BaseCache(object):
                 cachedata = self._deserialize(cachedata)
                 if cachedata[0] > current_time:
                     result = cachedata[1]
-        except:
+        except Exception:
             pass
         return result
 
@@ -183,7 +176,7 @@ class BaseCache(object):
             cachedata = (expires, data)
             cachedata_repr = self._serialize(cachedata)
             set_property(media_prop % string, cachedata_repr)
-        except:
+        except Exception:
             pass
 
     @staticmethod
@@ -199,7 +192,7 @@ class BaseCache(object):
             dbcon = connect_database(self.dbfile)
             dbcon.execute(BASE_DELETE % self.table, (string,))
             self.delete_memory_cache(string)
-        except:
+        except Exception:
             pass
 
     def delete_memory_cache(self, string):

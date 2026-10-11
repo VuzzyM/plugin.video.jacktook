@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Jacktook addon router — lazy-loading dispatcher.
 
@@ -6,9 +5,9 @@ Uses prefix-based routing with lazy imports to avoid loading all addon
 modules on every invocation. Only the modules needed for the current
 action are imported.
 """
+
 import sys
 from urllib import parse
-
 
 # ---------------------------------------------------------------------------
 # Action sets for set-based lookups
@@ -35,13 +34,17 @@ _DEBRID_ACTIONS = frozenset(
         "debrider_info",
         "get_rd_downloads",
         "get_tb_downloads",
+        "get_oc_downloads",
         "cloud",
         "cloud_details",
         "pm_auth",
         "pm_remove_auth",
         "tb_auth",
         "tb_remove_auth",
+        "oc_auth",
+        "oc_remove_auth",
         "torbox_info",
+        "offcloud_info",
         "easynews_info",
     }
 )
@@ -110,16 +113,24 @@ def _is_stremio_action(action):
     return action.startswith(("stremio_", "list_stremio")) or action in {
         "clear_stremio_search_history",
         "list_catalog",
+        "list_catalog_genres",
         "search_catalog",
         "add_custom_stremio_addon",
+        "configure_stremio_addon",
         "remove_custom_stremio_addon",
+        "rename_stremio_addon",
+        "rename_stremio_catalog",
         "torrentio_toggle_providers",
         "stremio_bypass_addons_select",
+        "stremio_subtitle_addons_select",
     }
 
 
 def _is_tmdb_action(action):
-    return action in ("tmdb_search_modes", "tmdb_episode_search_modes") or action.startswith(
+    return action in (
+        "tmdb_search_modes",
+        "tmdb_episode_search_modes",
+    ) or action.startswith(
         (
             "handle_tmdb",
             "search_tmdb",
@@ -138,12 +149,54 @@ def _is_trakt_action(action):
     return action.startswith("trakt_") or action in _TRAKT_EXTRAS
 
 
+def _is_simkl_action(action):
+    return action in (
+        "simkl_auth",
+        "simkl_logout",
+        "simkl_continue_watching",
+        "simkl_library",
+        "simkl_library_statuses",
+        "simkl_library_items",
+        "simkl_move_to_status",
+        "simkl_update_history",
+        "simkl_resume",
+        "simkl_discard_playback",
+    )
+
+
+def _is_nuvio_action(action):
+    return action in (
+        "nuvio_auth",
+        "nuvio_logout",
+        "nuvio_toggle_addons",
+        "nuvio_menu",
+        "nuvio_continue_watching",
+        "nuvio_history",
+        "nuvio_library",
+        "nuvio_remove_progress",
+        "nuvio_resume",
+        "nuvio_add_to_library",
+        "nuvio_remove_from_library",
+        "nuvio_update_history",
+        "nuvio_collections",
+        "nuvio_collection_folders",
+        "nuvio_collection_sources",
+        "nuvio_collection_discover",
+        "nuvio_collection_source_unavailable",
+    )
+
+
 def _is_debrid_action(action):
     return action in _DEBRID_ACTIONS
 
 
 def _is_telegram_action(action):
-    return action.startswith(("telegram_", "list_telegram", "list_jackgram"))
+    return (
+        action.startswith(
+            ("telegram_", "list_telegram", "list_jackgram", "test_jackgram", "search_jackgram")
+        )
+        or action == "test_jackgram_connection"
+    )
 
 
 def _is_torrserver_action(action):
@@ -218,17 +271,25 @@ def _route_stremio(action, params):
         "stremio_toggle_tv_addons",
         "stremio_filtered_selection",
         "add_custom_stremio_addon",
+        "configure_stremio_addon",
         "remove_custom_stremio_addon",
+        "rename_stremio_addon",
+        "rename_stremio_catalog",
         "stremio_bypass_addons_select",
+        "stremio_subtitle_addons_select",
     ):
         from lib.clients.stremio.addon_selection import (
+            add_custom_stremio_addon,
+            configure_stremio_addon,
+            remove_custom_stremio_addon,
+            rename_stremio_addon,
+            rename_stremio_catalog,
+            stremio_bypass_addons_select,
+            stremio_filtered_selection,
+            stremio_subtitle_addons_select,
             stremio_toggle_addons,
             stremio_toggle_catalogs,
             stremio_toggle_tv_addons,
-            stremio_filtered_selection,
-            add_custom_stremio_addon,
-            remove_custom_stremio_addon,
-            stremio_bypass_addons_select,
         )
 
         actions = {
@@ -237,8 +298,12 @@ def _route_stremio(action, params):
             "stremio_toggle_tv_addons": stremio_toggle_tv_addons,
             "stremio_filtered_selection": stremio_filtered_selection,
             "add_custom_stremio_addon": add_custom_stremio_addon,
+            "configure_stremio_addon": configure_stremio_addon,
             "remove_custom_stremio_addon": remove_custom_stremio_addon,
+            "rename_stremio_addon": rename_stremio_addon,
+            "rename_stremio_catalog": rename_stremio_catalog,
             "stremio_bypass_addons_select": stremio_bypass_addons_select,
+            "stremio_subtitle_addons_select": stremio_subtitle_addons_select,
         }
         actions[action](params)
     elif action == "stremio_manage_phone":
@@ -263,20 +328,24 @@ def _route_stremio(action, params):
 
         torrentio_toggle_providers(params)
     else:
+        from lib.clients.catalog_hub import (
+            list_catalog,
+            list_catalog_genres,
+            search_catalog,
+        )
         from lib.clients.stremio.catalog_menus import (
             clear_stremio_search_history,
-            list_catalog,
             list_stremio_episodes,
             list_stremio_movie,
             list_stremio_seasons,
             list_stremio_tv,
             list_stremio_tv_streams,
-            search_catalog,
         )
 
         actions = {
             "clear_stremio_search_history": clear_stremio_search_history,
             "list_catalog": list_catalog,
+            "list_catalog_genres": list_catalog_genres,
             "list_stremio_seasons": list_stremio_seasons,
             "list_stremio_episodes": list_stremio_episodes,
             "list_stremio_movie": list_stremio_movie,
@@ -388,18 +457,24 @@ def _route_trakt(action, params):
         actions[action](params)
     else:
         from lib.navigation import (
+            list_trakt_page,
             trakt_auth,
             trakt_auth_revoke,
+            trakt_continue_watching,
+            trakt_discard_playback,
             trakt_group_menu,
             trakt_list_content,
-            list_trakt_page,
+            trakt_resume,
         )
 
         actions = {
             "trakt_auth": trakt_auth,
             "trakt_auth_revoke": trakt_auth_revoke,
+            "trakt_continue_watching": trakt_continue_watching,
+            "trakt_discard_playback": trakt_discard_playback,
             "trakt_group_menu": trakt_group_menu,
             "trakt_list_content": trakt_list_content,
+            "trakt_resume": trakt_resume,
             "list_trakt_page": list_trakt_page,
         }
         action_func = actions.get(action)
@@ -409,25 +484,29 @@ def _route_trakt(action, params):
 
 def _route_debrid(action, params):
     from lib.navigation import (
-        rd_auth,
-        rd_remove_auth,
         ad_auth,
         ad_remove_auth,
-        real_debrid_info,
         alldebrid_info,
-        debrider_auth,
-        debrider_remove_auth,
-        debrider_info,
-        get_rd_downloads,
-        get_tb_downloads,
         cloud,
         cloud_details,
+        debrider_auth,
+        debrider_info,
+        debrider_remove_auth,
+        easynews_info,
+        get_oc_downloads,
+        get_rd_downloads,
+        get_tb_downloads,
+        oc_auth,
+        oc_remove_auth,
+        offcloud_info,
         pm_auth,
         pm_remove_auth,
+        rd_auth,
+        rd_remove_auth,
+        real_debrid_info,
         tb_auth,
         tb_remove_auth,
         torbox_info,
-        easynews_info,
     )
 
     actions = {
@@ -442,13 +521,17 @@ def _route_debrid(action, params):
         "debrider_info": debrider_info,
         "get_rd_downloads": get_rd_downloads,
         "get_tb_downloads": get_tb_downloads,
+        "get_oc_downloads": get_oc_downloads,
         "cloud": cloud,
         "cloud_details": cloud_details,
         "pm_auth": pm_auth,
         "pm_remove_auth": pm_remove_auth,
         "tb_auth": tb_auth,
         "tb_remove_auth": tb_remove_auth,
+        "oc_auth": oc_auth,
+        "oc_remove_auth": oc_remove_auth,
         "torbox_info": torbox_info,
+        "offcloud_info": offcloud_info,
         "easynews_info": easynews_info,
     }
     actions[action](params)
@@ -459,11 +542,19 @@ def _route_telegram(action, params):
         from lib.navigation import telegram_menu
 
         telegram_menu(params)
+    elif action == "search_jackgram":
+        from lib.navigation import search_jackgram
+
+        search_jackgram(params)
+    elif action == "test_jackgram_connection":
+        from lib.clients.jackgram.utils import test_jackgram_connection
+
+        test_jackgram_connection(params)
     else:
         from lib.clients.jackgram.utils import (
-            list_jackgram_raw_files,
             list_jackgram_latest_movies,
             list_jackgram_latest_series,
+            list_jackgram_raw_files,
             list_jackgram_title_sources,
         )
 
@@ -478,13 +569,84 @@ def _route_telegram(action, params):
             action_func(params)
 
 
+def _route_simkl(action, params):
+    from lib.navigation import (
+        simkl_auth,
+        simkl_continue_watching,
+        simkl_discard_playback,
+        simkl_library,
+        simkl_library_items,
+        simkl_library_statuses,
+        simkl_logout,
+        simkl_move_to_status,
+        simkl_resume,
+        simkl_update_history,
+    )
+
+    actions = {
+        "simkl_auth": simkl_auth,
+        "simkl_logout": simkl_logout,
+        "simkl_continue_watching": simkl_continue_watching,
+        "simkl_library": simkl_library,
+        "simkl_library_statuses": simkl_library_statuses,
+        "simkl_library_items": simkl_library_items,
+        "simkl_move_to_status": simkl_move_to_status,
+        "simkl_update_history": simkl_update_history,
+        "simkl_resume": simkl_resume,
+        "simkl_discard_playback": simkl_discard_playback,
+    }
+    actions[action](params)
+
+
+def _route_nuvio(action, params):
+    from lib.navigation import (
+        nuvio_add_to_library,
+        nuvio_auth,
+        nuvio_collection_discover,
+        nuvio_collection_folders,
+        nuvio_collection_source_unavailable,
+        nuvio_collection_sources,
+        nuvio_collections,
+        nuvio_continue_watching,
+        nuvio_history,
+        nuvio_library,
+        nuvio_logout,
+        nuvio_menu,
+        nuvio_remove_from_library,
+        nuvio_remove_progress,
+        nuvio_resume,
+        nuvio_toggle_addons,
+        nuvio_update_history,
+    )
+
+    {
+        "nuvio_auth": nuvio_auth,
+        "nuvio_logout": nuvio_logout,
+        "nuvio_toggle_addons": nuvio_toggle_addons,
+        "nuvio_menu": nuvio_menu,
+        "nuvio_continue_watching": nuvio_continue_watching,
+        "nuvio_history": nuvio_history,
+        "nuvio_library": nuvio_library,
+        "nuvio_remove_progress": nuvio_remove_progress,
+        "nuvio_resume": nuvio_resume,
+        "nuvio_add_to_library": nuvio_add_to_library,
+        "nuvio_remove_from_library": nuvio_remove_from_library,
+        "nuvio_update_history": nuvio_update_history,
+        "nuvio_collections": nuvio_collections,
+        "nuvio_collection_folders": nuvio_collection_folders,
+        "nuvio_collection_sources": nuvio_collection_sources,
+        "nuvio_collection_discover": nuvio_collection_discover,
+        "nuvio_collection_source_unavailable": nuvio_collection_source_unavailable,
+    }[action](params)
+
+
 def _route_torrserver(action, params):
     if action in ("torrent_action", "torrent_files", "display_picture", "display_text"):
         from lib.utils.torrent.torrserver_utils import (
-            torrent_action,
-            torrent_files,
             display_picture,
             display_text,
+            torrent_action,
+            torrent_files,
         )
 
         actions = {
@@ -496,8 +658,8 @@ def _route_torrserver(action, params):
         actions[action](params)
     elif action in ("download_torrent_subtitles", "download_and_play_subtitles"):
         from lib.utils.torrent.torrserver_utils import (
-            download_torrent_subtitles,
             download_and_play_subtitles,
+            download_torrent_subtitles,
         )
 
         actions = {
@@ -517,10 +679,10 @@ def _route_torrserver(action, params):
 
 def _route_webdav(action, params):
     from lib.clients.webdav.client import (
-        list_webdav,
-        webdav_provider_test,
         display_text_webdav,
+        list_webdav,
         show_picture_webdav,
+        webdav_provider_test,
     )
 
     actions = {
@@ -544,14 +706,14 @@ def _route_downloads(action, params):
         "downloads_viewer",
     ):
         from lib.downloader import (
-            download_video,
-            handle_download_file,
-            handle_cancel_download,
-            handle_pause_download,
-            handle_delete_file,
-            resume_download,
             download_cloud_file,
+            download_video,
             downloads_viewer,
+            handle_cancel_download,
+            handle_delete_file,
+            handle_download_file,
+            handle_pause_download,
+            resume_download,
         )
 
         actions = {
@@ -595,14 +757,14 @@ def _route_mdblist(action, params):
 def _route_cache(action, params):
     from lib.navigation import (
         clear_all_cached,
-        clear_trakt_cache,
-        clear_tmdb_cache,
-        clear_stremio_cache,
-        clear_debrid_cache,
-        clear_mdblist_cache,
         clear_database_cache,
+        clear_debrid_cache,
         clear_history,
+        clear_mdblist_cache,
         clear_search_history,
+        clear_stremio_cache,
+        clear_tmdb_cache,
+        clear_trakt_cache,
     )
 
     actions = {
@@ -656,10 +818,10 @@ def _route_gui(action, params):
         del window
     else:
         from lib.navigation import (
-            test_source_select,
-            test_run_next,
-            test_resume_dialog,
             test_download_dialog,
+            test_resume_dialog,
+            test_run_next,
+            test_source_select,
         )
 
         actions = {
@@ -684,6 +846,16 @@ def _route_core(action, params):
         from lib.gui.excluded_languages_dialog import open_excluded_languages_dialog
 
         open_excluded_languages_dialog()
+        return
+    if action == "choose_external_scraper":
+        from lib.gui.external_scraper_dialog import choose_external_scraper
+
+        choose_external_scraper()
+        return
+    if action == "open_external_scraper_settings":
+        from lib.gui.external_scraper_dialog import open_external_scraper_settings
+
+        open_external_scraper_settings()
         return
     if action in ("resolve_for_pack_selection", "resolve_for_subtitles"):
         from lib.actions import resolve_for_pack_selection, resolve_for_subtitles
@@ -710,55 +882,54 @@ def _route_core(action, params):
         delete_last_title_entry(params)
     else:
         from lib.navigation import (
-            tv_shows_items,
-            movies_items,
-            trakt_group_menu,
-            direct_menu,
-            search_menu,
-            anime_menu,
-            anime_item,
-            anime_search,
-            animation_menu,
+            add_to_library,
+            addon_update,
             animation_item,
-            tv_menu,
+            animation_menu,
+            anime_item,
+            anime_menu,
+            anime_search,
+            choose_view,
+            clear_library,
+            continue_watching_menu,
+            direct_menu,
+            donate,
+            easynews_info,
+            export_settings_backup,
+            factory_reset,
+            files_history,
+            history_menu,
+            kodi_logs,
+            library_calendar,
+            library_menu,
+            library_movies,
+            library_shows,
+            movies_items,
+            next_page_anime,
+            open_burst_config,
+            play_autoscraped,
+            play_from_pack,
+            play_media,
+            play_trailer,
+            play_url,
+            remove_from_continue_watching,
+            remove_from_library,
+            reset_all_settings,
+            reset_views,
+            restore_settings_backup,
+            save_view,
             search,
             search_direct,
             search_item,
-            next_page_anime,
-            play_media,
-            play_autoscraped,
-            play_from_pack,
-            play_trailer,
-            play_url,
-            settings_menu,
+            search_menu,
             settings,
-            export_settings_backup,
-            restore_settings_backup,
-            reset_all_settings,
-            factory_reset,
-            history_menu,
-            files_history,
-            titles_history,
-            titles_calendar,
-            library_menu,
-            continue_watching_menu,
-            library_shows,
-            library_movies,
-            library_calendar,
-            remove_from_library,
-            clear_library,
-            remove_from_continue_watching,
-            add_to_library,
-            donate,
-            addon_update,
-            downgrade_addon,
+            settings_menu,
             show_changelog,
-            open_burst_config,
-            kodi_logs,
-            easynews_info,
-            choose_view,
-            save_view,
-            reset_views,
+            titles_calendar,
+            titles_history,
+            trakt_group_menu,
+            tv_menu,
+            tv_shows_items,
             views_menu,
         )
 
@@ -804,7 +975,6 @@ def _route_core(action, params):
             "add_to_library": add_to_library,
             "donate": donate,
             "addon_update": addon_update,
-            "downgrade_addon": downgrade_addon,
             "show_changelog": show_changelog,
             "open_burst_config": open_burst_config,
             "kodi_logs": kodi_logs,
@@ -823,6 +993,8 @@ ROUTE_GROUPS = (
     (_is_stremio_action, _route_stremio),
     (_is_tmdb_action, _route_tmdb),
     (_is_trakt_action, _route_trakt),
+    (_is_simkl_action, _route_simkl),
+    (_is_nuvio_action, _route_nuvio),
     (_is_debrid_action, _route_debrid),
     (_is_telegram_action, _route_telegram),
     (_is_torrserver_action, _route_torrserver),

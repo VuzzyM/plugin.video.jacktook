@@ -1,5 +1,6 @@
 import importlib
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from lib.domain.torrent import TorrentStream
@@ -33,7 +34,11 @@ def test_download_file_uses_episode_filename_when_tv_data_is_present():
         source_select_module.SourceSelect,
         "_ensure_playback_info",
         return_value=playback_info,
-    ), patch("lib.downloader.get_destination_path", return_value="/downloads") as mock_get_dest, patch.object(source_select_module, "action_url_run", return_value="builtin") as action_url_run, patch.object(
+    ), patch(
+        "lib.downloader.get_destination_path", return_value="/downloads"
+    ) as mock_get_dest, patch.object(
+        source_select_module, "action_url_run", return_value="builtin"
+    ) as action_url_run, patch.object(
         source_select_module.xbmc, "executebuiltin"
     ) as executebuiltin:
         source_select._download_file(selected_source)
@@ -71,7 +76,11 @@ def test_download_file_uses_year_for_movie_filename():
         source_select_module.SourceSelect,
         "_ensure_playback_info",
         return_value=playback_info,
-    ), patch("lib.downloader.get_destination_path", return_value="/downloads") as mock_get_dest, patch.object(source_select_module, "action_url_run", return_value="builtin") as action_url_run, patch.object(
+    ), patch(
+        "lib.downloader.get_destination_path", return_value="/downloads"
+    ) as mock_get_dest, patch.object(
+        source_select_module, "action_url_run", return_value="builtin"
+    ) as action_url_run, patch.object(
         source_select_module.xbmc, "executebuiltin"
     ) as executebuiltin:
         source_select._download_file(selected_source)
@@ -136,16 +145,161 @@ def test_populate_sources_list_shows_debrid_type_for_stremio_debrid_sources():
             "badges": "",
             "release_group": "",
         },
-    ), patch.object(source_select_module, "bytes_to_human_readable", return_value="1 KB"), patch.object(
+    ), patch.object(
+        source_select_module, "bytes_to_human_readable", return_value="1 KB"
+    ), patch.object(
         source_select_module, "get_provider_color", side_effect=lambda value: value
-    ), patch.object(source_select_module, "get_random_color", side_effect=lambda value: value), patch.object(
-        source_select_module, "get_colored_languages", return_value=""
-    ), patch.object(source_select_module, "extract_publish_date", return_value=""), patch.object(
-        source_select_module, "get_source_status", return_value="[B]Cached[/B]"
-    ):
+    ), patch.object(
+        source_select_module, "get_random_color", side_effect=lambda value: value
+    ), patch.object(source_select_module, "get_colored_languages", return_value=""), patch.object(
+        source_select_module, "extract_publish_date", return_value=""
+    ), patch.object(source_select_module, "get_source_status", return_value="[B]Cached[/B]"):
         source_select.populate_sources_list()
 
     assert source_select.display_list.items[0].properties["type"] == DebridType.TB
+
+
+def test_populate_sources_list_uses_current_stremio_alias_for_cached_source():
+    source_select_module = _load_source_select_module()
+    source_select = source_select_module.SourceSelect.__new__(source_select_module.SourceSelect)
+
+    class _FakeListItem:
+        def __init__(self, label=""):
+            self.label = label
+            self.properties = {}
+
+        def setProperty(self, key, value):
+            self.properties[key] = value
+
+    class _FakeDisplayList:
+        def __init__(self):
+            self.items = []
+
+        def reset(self):
+            self.items = []
+
+        def addItem(self, item):
+            self.items.append(item)
+
+    addon_key = "org.example.addon|https://example.com"
+    source_select.display_list = _FakeDisplayList()
+    source_select.filter_applied = False
+    source_select.filtered_sources = None
+    source_select.sources = [
+        TorrentStream(
+            title="Example.Source.1080p",
+            type=IndexerType.STREMIO_DEBRID,
+            addonKey=addon_key,
+            addonName="Old Alias",
+            addonInstanceLabel="Old Alias (example.com, custom)",
+            indexer="Original",
+            size=1024,
+            quality="1080p",
+        ),
+        TorrentStream(
+            title="Another.Source.1080p",
+            type=IndexerType.STREMIO_DEBRID,
+            addonKey="org.example.other|https://example.com",
+            addonInstanceLabel="Other Addon",
+            indexer="Original Other",
+            size=2048,
+            quality="1080p",
+        ),
+    ]
+
+    with patch.object(source_select_module.xbmcgui, "ListItem", _FakeListItem), patch.object(
+        source_select_module,
+        "parse_title_info",
+        return_value={
+            "clean_title": "Example Source",
+            "codec": "",
+            "audio": "",
+            "badges": "",
+            "release_group": "",
+        },
+    ), patch.object(
+        source_select_module, "bytes_to_human_readable", return_value="1 KB"
+    ), patch.object(
+        source_select_module, "get_provider_color", side_effect=lambda value: value
+    ), patch.object(
+        source_select_module, "get_random_color", side_effect=lambda value: value
+    ), patch.object(source_select_module, "get_colored_languages", return_value=""), patch.object(
+        source_select_module, "extract_publish_date", return_value=""
+    ), patch.object(source_select_module, "get_source_status", return_value="[B]Cached[/B]"), patch.object(
+        source_select_module.cache,
+        "get",
+        return_value={addon_key: "New Alias"},
+    ) as cache_get:
+        source_select.populate_sources_list()
+
+    cache_get.assert_called_once_with(source_select_module.STREMIO_ADDON_ALIASES_KEY)
+    assert (
+        source_select.display_list.items[0].properties["indexer"]
+        == "New Alias (example.com, custom)"
+    )
+    assert source_select.display_list.items[1].properties["indexer"] == "Other Addon"
+
+
+def test_release_group_filter_is_case_insensitive_and_uses_stable_labels():
+    source_select_module = _load_source_select_module()
+    source_select = source_select_module.SourceSelect.__new__(source_select_module.SourceSelect)
+    source_select.sources = [
+        SimpleNamespace(title="[Judas] Show - 01", provider="First"),
+        SimpleNamespace(title="Show.S01E02-Erai-Raws.mkv", provider="Second"),
+        SimpleNamespace(title="Show.S01E03-JUDAS.mkv", provider="Third"),
+    ]
+    source_select.filtered_sources = None
+    source_select.filter_applied = False
+    source_select.display_list = MagicMock()
+    source_select.populate_sources_list = MagicMock()
+    source_select.set_default_focus = MagicMock()
+
+    filter_type_popup = MagicMock(selected_type="release_group")
+    filter_popup = MagicMock(selected_filter="judas")
+    with patch.object(
+        source_select_module, "FilterTypeWindow", return_value=filter_type_popup
+    ), patch.object(
+        source_select_module, "FilterWindow", return_value=filter_popup
+    ) as filter_window:
+        source_select._handle_filter_action()
+
+    assert filter_popup.doModal.called
+    assert filter_window.call_args.kwargs["filter"] == ["Erai-Raws", "Judas"]
+    assert source_select.filtered_sources == [source_select.sources[0], source_select.sources[2]]
+    assert source_select.filter_applied is True
+
+
+def test_existing_provider_filter_and_release_group_cancel_are_preserved():
+    source_select_module = _load_source_select_module()
+    source_select = source_select_module.SourceSelect.__new__(source_select_module.SourceSelect)
+    source_select.sources = [
+        SimpleNamespace(title="[Judas] Show - 01", provider="First"),
+        SimpleNamespace(title="Show.S01E02-Erai-Raws.mkv", provider="Second"),
+    ]
+    source_select.filtered_sources = [source_select.sources[0]]
+    source_select.filter_applied = True
+    source_select.display_list = MagicMock()
+    source_select.populate_sources_list = MagicMock()
+    source_select.set_default_focus = MagicMock()
+
+    filter_type_popup = MagicMock(selected_type="provider")
+    filter_popup = MagicMock(selected_filter="Second")
+    with patch.object(
+        source_select_module, "FilterTypeWindow", return_value=filter_type_popup
+    ), patch.object(source_select_module, "FilterWindow", return_value=filter_popup):
+        source_select._handle_filter_action()
+
+    assert source_select.filtered_sources == [source_select.sources[1]]
+
+    filter_type_popup.selected_type = "release_group"
+    filter_popup.selected_filter = None
+    with patch.object(
+        source_select_module, "FilterTypeWindow", return_value=filter_type_popup
+    ), patch.object(source_select_module, "FilterWindow", return_value=filter_popup):
+        source_select._handle_filter_action()
+
+    assert source_select.filtered_sources is None
+    assert source_select.filter_applied is False
 
 
 def test_torrent_context_menu_does_not_include_download_video():
@@ -168,13 +322,21 @@ def test_torrent_context_menu_does_not_include_download_video():
     dialog = MagicMock()
     dialog.contextmenu.return_value = -1
 
-    with patch.object(source_select_module, "translation", side_effect=lambda key: labels.get(key, str(key))), \
-         patch.object(source_select_module.xbmcgui, "Dialog", return_value=dialog):
+    with patch.object(
+        source_select_module,
+        "translation",
+        side_effect=lambda key: labels.get(key, str(key)),
+    ), patch.object(source_select_module.xbmcgui, "Dialog", return_value=dialog):
         source_select._handle_context_menu_action()
 
     shown_items = dialog.contextmenu.call_args.args[0]
     assert "Download video" not in shown_items
-    assert shown_items == ["Download to debrid", "Add to TorrServer", "Download subtitles", "Upload subtitle"]
+    assert shown_items == [
+        "Download to debrid",
+        "Add to TorrServer",
+        "Download subtitles",
+        "Upload subtitle",
+    ]
 
 
 def test_torrent_context_menu_download_subtitles_resolves_for_subtitle_download():
@@ -192,8 +354,9 @@ def test_torrent_context_menu_download_subtitles_resolves_for_subtitle_download(
     dialog = MagicMock()
     dialog.contextmenu.return_value = 2
 
-    with patch.object(source_select_module.xbmcgui, "Dialog", return_value=dialog), \
-         patch.object(source_select, "_resolve_item") as resolve_item:
+    with patch.object(source_select_module.xbmcgui, "Dialog", return_value=dialog), patch.object(
+        source_select, "_resolve_item"
+    ) as resolve_item:
         source_select._handle_context_menu_action()
 
     resolve_item.assert_called_once_with(selected_source, is_subtitle_download=True)

@@ -2,8 +2,8 @@ from unittest.mock import MagicMock, patch
 
 from lib.clients.debrid.torbox import TorboxHelper
 from lib.nav import debrid as debrid_navigation
-from lib.utils.general.utils import DebridType
 from lib.utils.debrid import debrid_utils
+from lib.utils.general.utils import DebridType
 from lib.utils.torrent import torrserver_utils
 
 
@@ -19,10 +19,38 @@ def test_add_source_to_torrserver_uses_magnet_when_available():
         )
 
     assert result == "abc123"
-    api.add_magnet.assert_called_once_with(
-        "magnet:?xt=urn:btih:abc123", title="Test", poster=""
-    )
+    api.add_magnet.assert_called_once_with("magnet:?xt=urn:btih:abc123", title="Test", poster="")
     notification.assert_called_once()
+
+
+def test_add_source_to_torrserver_normalizes_category_mode():
+    api = MagicMock()
+    api.add_magnet.return_value = "abc123"
+
+    with patch.object(torrserver_utils, "JACKTORR_ADDON", True), patch.object(
+        torrserver_utils, "get_torrserver_api", return_value=api
+    ), patch.object(torrserver_utils, "notification"):
+        torrserver_utils.add_source_to_torrserver(
+            magnet="magnet:?xt=urn:btih:abc123", category="movies"
+        )
+
+    api.add_magnet.assert_called_once_with(
+        "magnet:?xt=urn:btih:abc123", title="", poster="", category="movie"
+    )
+
+
+def test_add_source_to_torrserver_omits_invalid_category():
+    api = MagicMock()
+    api.add_magnet.return_value = "abc123"
+
+    with patch.object(torrserver_utils, "JACKTORR_ADDON", True), patch.object(
+        torrserver_utils, "get_torrserver_api", return_value=api
+    ), patch.object(torrserver_utils, "notification"):
+        torrserver_utils.add_source_to_torrserver(
+            magnet="magnet:?xt=urn:btih:abc123", category="anime"
+        )
+
+    api.add_magnet.assert_called_once_with("magnet:?xt=urn:btih:abc123", title="", poster="")
 
 
 def test_add_source_to_torrserver_saves_metadata_under_returned_and_source_hashes():
@@ -34,7 +62,9 @@ def test_add_source_to_torrserver_saves_metadata_under_returned_and_source_hashe
         torrserver_utils, "get_torrserver_api", return_value=api
     ), patch.object(torrserver_utils, "notification"), patch.object(
         torrserver_utils, "get_info_hash_from_magnet", return_value="MAGNETHASH"
-    ), patch.object(torrserver_utils, "save_torrent_meta") as mock_save:
+    ), patch.object(torrserver_utils, "save_torrent_meta") as mock_save, patch.object(
+        torrserver_utils, "save_display_metadata"
+    ) as mock_display_save:
         result = torrserver_utils.add_source_to_torrserver(
             magnet="magnet:?xt=urn:btih:MAGNETHASH",
             info_hash="SOURCEHASH",
@@ -46,6 +76,13 @@ def test_add_source_to_torrserver_saves_metadata_under_returned_and_source_hashe
     saved_hashes = [call.args[0] for call in mock_save.call_args_list]
     assert saved_hashes == ["returnedhash", "sourcehash", "magnethash"]
     assert all(call.args[1]["ids"]["imdb_id"] == "tt123" for call in mock_save.call_args_list)
+    assert [call.args[1] for call in mock_display_save.call_args_list] == [
+        "sourcehash",
+        "magnethash",
+        "returnedhash",
+        "sourcehash",
+        "magnethash",
+    ]
 
 
 def test_add_source_to_torrserver_uploads_torrent_file_from_url():
@@ -91,18 +128,14 @@ def test_add_source_to_torrserver_falls_back_to_magnet_when_url_fails():
 
     with patch.object(torrserver_utils, "JACKTORR_ADDON", True), patch.object(
         torrserver_utils, "get_torrserver_api", return_value=api
-    ), patch.object(
-        torrserver_utils.requests, "get", side_effect=Exception("network")
-    ):
+    ), patch.object(torrserver_utils.requests, "get", side_effect=Exception("network")):
         result = torrserver_utils.add_source_to_torrserver(
             url="https://example.com/details/1",
             magnet="magnet:?xt=urn:btih:abc123",
         )
 
     assert result == "abc123"
-    api.add_magnet.assert_called_once_with(
-        "magnet:?xt=urn:btih:abc123", title="", poster=""
-    )
+    api.add_magnet.assert_called_once_with("magnet:?xt=urn:btih:abc123", title="", poster="")
 
 
 def test_add_source_to_debrid_uses_preferred_enabled_service():
@@ -133,6 +166,11 @@ def test_choose_debrid_for_transfer_prompts_when_multiple_supported_services_ena
 
     assert selected == DebridType.AD
     dialog.select.assert_called_once()
+
+
+def test_offcloud_is_supported_for_pack_direct_and_cloud_transfer():
+    assert DebridType.OC in debrid_utils.PACK_DIRECT_DEBRID_TYPES
+    assert DebridType.OC in debrid_utils.SUPPORTED_CLOUD_TRANSFER_DEBRIDS
 
 
 def test_torbox_helper_get_cloud_downloads_returns_playable_items():
@@ -178,9 +216,7 @@ def test_torbox_helper_get_link_uses_cloud_ids_when_present():
 
     assert data is not None
     assert data["url"] == "https://download"
-    helper.client.create_download_link.assert_called_once_with(
-        "torrent-1", "file-2", "127.0.0.1"
-    )
+    helper.client.create_download_link.assert_called_once_with("torrent-1", "file-2", "127.0.0.1")
 
 
 def test_get_tb_downloads_builds_playable_cloud_entries():

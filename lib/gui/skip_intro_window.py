@@ -3,8 +3,7 @@ from threading import Thread
 import xbmc
 import xbmcgui
 
-from lib.utils.kodi.utils import ADDON_PATH, kodilog
-
+from lib.utils.kodi.utils import kodilog
 
 ACTION_PREVIOUS_MENU = 10
 ACTION_PLAYER_STOP = 13
@@ -14,10 +13,11 @@ ACTION_NAV_BACK = 92
 class SkipIntroWindow(xbmcgui.WindowXMLDialog):
     """
     Overlay dialog that shows a 'Skip Intro' or 'Skip Recap' button
+
     during playback when IntroDB segment data is available.
     """
-
     def __init__(self, xml_file, xml_location, segment_data=None, label="Skip Intro"):
+
         super().__init__(xml_file, xml_location)
         self.segment_data = segment_data or {}
         self.label = label
@@ -41,6 +41,7 @@ class SkipIntroWindow(xbmcgui.WindowXMLDialog):
     def _background_monitor(self):
         """Monitor playback and auto-close when segment ends or playback stops."""
         try:
+
             end_sec = self.segment_data.get("end_sec", 0)
 
             while not self.closed and self.player.isPlaying():
@@ -80,6 +81,7 @@ class SkipIntroWindow(xbmcgui.WindowXMLDialog):
     def _do_skip(self):
         """Seek to the end of the current segment."""
         try:
+
             end_sec = self.segment_data.get("end_sec", 0)
             if end_sec > 0 and self.player.isPlaying():
                 self.player.seekTime(end_sec)

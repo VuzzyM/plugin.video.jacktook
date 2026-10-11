@@ -1,4 +1,7 @@
 from urllib.parse import quote
+
+from xbmcplugin import addDirectoryItem
+
 from lib.clients.tmdb.utils.utils import mdblist_get, tmdb_get
 from lib.utils.general.utils import (
     build_list_item,
@@ -7,15 +10,13 @@ from lib.utils.general.utils import (
     set_pluging_category,
 )
 from lib.utils.kodi.utils import (
-    ADDON_HANDLE,
     build_url,
     end_of_directory,
+    get_addon_handle,
     notification,
     show_keyboard,
     translation,
 )
-
-from xbmcplugin import addDirectoryItem
 
 
 def search_mdbd_lists(params):
@@ -39,7 +40,7 @@ def search_mdbd_lists(params):
         list_id = item.get("id")
         list_item = build_list_item(label, "mdblist.png")
         addDirectoryItem(
-            ADDON_HANDLE,
+            get_addon_handle(),
             build_url("show_mdblist_list", list_id=list_id, mode=mode),
             list_item,
             isFolder=True,
@@ -59,7 +60,7 @@ def user_mdbd_lists(params):
         list_id = item.get("id")
         list_item = build_list_item(label, "mdblist.png")
         addDirectoryItem(
-            ADDON_HANDLE,
+            get_addon_handle(),
             build_url("show_mdblist_list", list_id=list_id, mode=mode),
             list_item,
             isFolder=True,
@@ -79,7 +80,7 @@ def top_mdbd_lists(params):
         list_id = item.get("id")
         list_item = build_list_item(label, "mdblist.png")
         addDirectoryItem(
-            ADDON_HANDLE,
+            get_addon_handle(),
             build_url("show_mdblist_list", list_id=list_id, mode=mode),
             list_item,
             isFolder=True,
@@ -152,7 +153,7 @@ def show_mdblist_list(params):
 
         list_item = make_listing(item)
         addDirectoryItem(
-            ADDON_HANDLE,
+            get_addon_handle(),
             url,
             list_item,
             isFolder=is_folder,
@@ -160,7 +161,7 @@ def show_mdblist_list(params):
 
     list_item = build_list_item("Next Page", "nextpage.png")
     addDirectoryItem(
-        ADDON_HANDLE,
+        get_addon_handle(),
         build_url(
             "show_mdblist_list",
             list_id=list_id,

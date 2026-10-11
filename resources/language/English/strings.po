@@ -267,6 +267,26 @@ msgctxt "#30257"
 msgid "Do you want to install Jacktook Burst?"
 msgstr ""
 
+msgctxt "#30258"
+msgid "Invalid host for %s. Use http:// or https://"
+msgstr ""
+
+msgctxt "#30259"
+msgid "Test connection"
+msgstr ""
+
+msgctxt "#30260"
+msgid "Jackgram: OK"
+msgstr ""
+
+msgctxt "#30261"
+msgid "Host not reachable"
+msgstr ""
+
+msgctxt "#30262"
+msgid "Search in Telegram"
+msgstr ""
+
 msgctxt "#30650"
 msgid "Queued"
 msgstr ""
@@ -431,6 +451,58 @@ msgctxt "#30939"
 msgid "Auto-resume from last position without asking"
 msgstr ""
 
+msgctxt "#30940"
+msgid "Use Percentage Trigger"
+msgstr ""
+
+msgctxt "#30941"
+msgid "Show Dialog at Playback Percentage"
+msgstr ""
+
+msgctxt "#30942"
+msgid "Trigger the next-episode dialog based on percentage of video played instead of seconds remaining."
+msgstr ""
+
+msgctxt "#30943"
+msgid "The percentage at which the next-episode dialog appears (e.g. 95 means 95% of the video)."
+msgstr ""
+
+msgctxt "#30944"
+msgid "Auto-Play Timeout"
+msgstr ""
+
+msgctxt "#30945"
+msgid "Seconds before auto-playing next episode. 0 = disabled, dialog waits for user input."
+msgstr ""
+
+msgctxt "#30946"
+msgid "Offcloud Configuration"
+msgstr "Offcloud Configuration"
+
+msgctxt "#30947"
+msgid "Enable Offcloud cached torrent and cloud transfer support."
+msgstr "Enable Offcloud cached torrent and cloud transfer support."
+
+msgctxt "#30948"
+msgid "Your Offcloud account username/email."
+msgstr "Your Offcloud account username/email."
+
+msgctxt "#30949"
+msgid "Offcloud API key from Account API Key settings."
+msgstr "Offcloud API key from Account API Key settings."
+
+msgctxt "#30950"
+msgid "View Offcloud account information."
+msgstr "View Offcloud account information."
+
+msgctxt "#30951"
+msgid "Authorize add-on to access Offcloud account."
+msgstr "Authorize add-on to access Offcloud account."
+
+msgctxt "#30952"
+msgid "Revoke Offcloud account access."
+msgstr "Revoke Offcloud account access."
+
 msgctxt "#30728"
 msgid "Seeds"
 msgstr ""
@@ -457,6 +529,10 @@ msgstr ""
 
 msgctxt "#30734"
 msgid "Enable"
+msgstr ""
+
+msgctxt "#30735"
+msgid "Still Watching? Threshold"
 msgstr ""
 
 msgctxt "#30736"
@@ -605,6 +681,10 @@ msgstr ""
 
 msgctxt "#30772"
 msgid "Zilean Host"
+msgstr ""
+
+msgctxt "#30773"
+msgid "Number of consecutive auto-played episodes before asking 'Still Watching?'. Set to 0 to disable."
 msgstr ""
 
 msgctxt "#30774"
@@ -834,6 +914,118 @@ msgstr "Enable or disable Trakt scrobbling and resume playback from the last tra
 msgctxt "#30937"
 msgid "Clear cached Trakt data and force Jacktook to fetch fresh Trakt results the next time you open a Trakt view."
 msgstr "Clear cached Trakt data and force Jacktook to fetch fresh Trakt results the next time you open a Trakt view."
+
+msgctxt "#90970"
+msgid "Simkl Configuration"
+msgstr "Simkl Configuration"
+
+msgctxt "#90971"
+msgid "Enable Simkl"
+msgstr "Enable Simkl"
+
+msgctxt "#90972"
+msgid "Enable Simkl account integration."
+msgstr "Enable Simkl account integration."
+
+msgctxt "#90973"
+msgid "Advanced Simkl Client ID Override"
+msgstr "Advanced Simkl Client ID Override"
+
+msgctxt "#90974"
+msgid "Optional. Leave empty to use Jacktook's built-in Simkl application."
+msgstr "Optional. Leave empty to use Jacktook's built-in Simkl application."
+
+msgctxt "#90975"
+msgid "Authorize Simkl"
+msgstr "Authorize Simkl"
+
+msgctxt "#90976"
+msgid "Link your Simkl account using PIN authorization."
+msgstr "Link your Simkl account using PIN authorization."
+
+msgctxt "#90977"
+msgid "Reset Simkl Authorization"
+msgstr "Reset Simkl Authorization"
+
+msgctxt "#90978"
+msgid "Remove the saved Simkl access token from Jacktook."
+msgstr "Remove the saved Simkl access token from Jacktook."
+
+msgctxt "#90979"
+msgid "Enable Simkl Scrobbling"
+msgstr "Enable Simkl Scrobbling"
+
+msgctxt "#90980"
+msgid "Send movie and TV episode playback start, pause, resume, and stop events to Simkl."
+msgstr "Send movie and TV episode playback start, pause, resume, and stop events to Simkl."
+
+msgctxt "#90981"
+msgid "Simkl Library"
+msgstr "Simkl Library"
+
+msgctxt "#90983"
+msgid "Plan to Watch"
+msgstr "Plan to Watch"
+
+msgctxt "#90984"
+msgid "Watching"
+msgstr "Watching"
+
+msgctxt "#90985"
+msgid "Completed"
+msgstr "Completed"
+
+msgctxt "#90986"
+msgid "On Hold"
+msgstr "On Hold"
+
+msgctxt "#90987"
+msgid "Dropped"
+msgstr "Dropped"
+
+msgctxt "#90988"
+msgid "Move to %s"
+msgstr "Move to %s"
+
+msgctxt "#90989"
+msgid "Simkl status updated."
+msgstr "Simkl status updated."
+
+msgctxt "#90990"
+msgid "Unable to update Simkl status."
+msgstr "Unable to update Simkl status."
+
+msgctxt "#90991"
+msgid "Mark as Watched on Simkl"
+msgstr "Mark as Watched on Simkl"
+
+msgctxt "#90992"
+msgid "Mark as Unwatched on Simkl"
+msgstr "Mark as Unwatched on Simkl"
+
+msgctxt "#90993"
+msgid "Remove Movie from Simkl?"
+msgstr "Remove Movie from Simkl?"
+
+msgctxt "#90994"
+msgid "Removing a movie from its Simkl watch history also removes it from your Simkl library. Continue?"
+msgstr "Removing a movie from its Simkl watch history also removes it from your Simkl library. Continue?"
+
+msgctxt "#90995"
+msgid "Simkl watch history updated."
+msgstr "Simkl watch history updated."
+
+msgctxt "#90996"
+msgid "Unable to update Simkl watch history."
+msgstr "Unable to update Simkl watch history."
+
+msgctxt "#90997"
+msgid "Enable and authorize Simkl in settings to access your library."
+msgstr "Enable and authorize Simkl in settings to access your library."
+
+msgctxt "#90998"
+msgid "Enable and authorize Trakt in settings to access your library."
+msgstr "Enable and authorize Trakt in settings to access your library."
 
 msgctxt "#40000"
 msgid "Arabic (United Arab Emirates)"
@@ -1408,7 +1600,7 @@ msgid "Enable Trakt.tv Scrobbling"
 msgstr ""
 
 msgctxt "#30878"
-msgid "Auto select subtitle when playing"
+msgid "Automatically find and load subtitles"
 msgstr ""
 
 msgctxt "#30879"
@@ -1557,7 +1749,7 @@ msgstr ""
 
 
 msgctxt "#90022"
-msgid "If you enjoy using Jacktook and want to support its development, you can buy me a coffee! Your support helps keep the project active and enables future improvements:"
+msgid "Jacktook is free and built with care in spare time. If you enjoy the addon, consider supporting its development. Donations are optional and help keep updates coming."
 msgstr ""
 
 msgctxt "#90023"
@@ -2107,6 +2299,10 @@ msgctxt "#32303"
 msgid "Filter by Language"
 msgstr ""
 
+msgctxt "#32307"
+msgid "Filter by Group"
+msgstr ""
+
 msgctxt "#32304"
 msgid "Filter by Torrents"
 msgstr ""
@@ -2128,8 +2324,8 @@ msgid "Check availability of addons and show only reachable ones"
 msgstr "Check availability of addons and show only reachable ones"
 
 msgctxt "#90164"
-msgid "Skip Intro / Recap"
-msgstr "Skip Intro / Recap"
+msgid "Skip Intro / Recap / Ending"
+msgstr "Skip Intro / Recap / Ending"
 
 msgctxt "#90165"
 msgid "Enable Skip Intro"
@@ -2144,8 +2340,20 @@ msgid "Auto-skip"
 msgstr "Auto-skip"
 
 msgctxt "#90168"
-msgid "Automatically skip intros and recaps without showing the button"
-msgstr "Automatically skip intros and recaps without showing the button"
+msgid "Automatically skip intros, recaps and endings without showing the button"
+msgstr "Automatically skip intros, recaps and endings without showing the button"
+
+msgctxt "#90169"
+msgid "Skip Ending"
+msgstr "Skip Ending"
+
+msgctxt "#90170"
+msgid "Enable Skip Ending"
+msgstr "Enable Skip Ending"
+
+msgctxt "#90184"
+msgid "Detect and offer to skip the ending (credits) during playback"
+msgstr "Detect and offer to skip the ending (credits) during playback"
 
 msgctxt "#90160"
 msgid "Skip Intro"
@@ -3367,6 +3575,30 @@ msgctxt "#90534"
 msgid "Selected addon(s) removed."
 msgstr "Selected addon(s) removed."
 
+msgctxt "#90836"
+msgid "Configure Stremio Addon"
+msgstr "Configure Stremio Addon"
+
+msgctxt "#90837"
+msgid "This addon does not expose a standard configuration URL."
+msgstr "This addon does not expose a standard configuration URL."
+
+msgctxt "#90838"
+msgid "Unable to import the configured manifest. Check the HTTPS manifest URL and try again."
+msgstr "Unable to import the configured manifest. Check the HTTPS manifest URL and try again."
+
+msgctxt "#90839"
+msgid "Unable to save the configured addon."
+msgstr "Unable to save the configured addon."
+
+msgctxt "#90840"
+msgid "Unable to open the external configurator."
+msgstr "Unable to open the external configurator."
+
+msgctxt "#90841"
+msgid "Open the official addon configurator, then import its configured manifest URL as a custom addon."
+msgstr "Open the official addon configurator, then import its configured manifest URL as a custom addon."
+
 msgctxt "#90535"
 msgid "Untitled List"
 msgstr "Untitled List"
@@ -4152,35 +4384,35 @@ msgid "Get your API key at ratingposterdb.com"
 msgstr ""
 
 msgctxt "#90765"
-msgid "Codec Filters"
+msgid "Filter by Codecs"
 msgstr ""
 
 msgctxt "#90766"
-msgid "HDR Filters"
+msgid "Filter by HDR"
 msgstr ""
 
 msgctxt "#90767"
-msgid "HEVC / H.265"
+msgid "Include HEVC / H.265"
 msgstr ""
 
 msgctxt "#90768"
-msgid "AV1"
+msgid "Include AV1"
 msgstr ""
 
 msgctxt "#90769"
-msgid "H.264"
+msgid "Include H.264"
 msgstr ""
 
 msgctxt "#90770"
-msgid "Dolby Vision"
+msgid "Include Dolby Vision"
 msgstr ""
 
 msgctxt "#90771"
-msgid "HDR10 / HDR10+"
+msgid "Include HDR10 / HDR10+"
 msgstr ""
 
 msgctxt "#90772"
-msgid "HDR (generic)"
+msgid "Include HDR (generic)"
 msgstr ""
 
 msgctxt "#90774"
@@ -4346,3 +4578,418 @@ msgstr ""
 msgctxt "#90814"
 msgid "Choose original languages to hide from TMDB listings"
 msgstr ""
+
+msgctxt "#90815"
+msgid "Support Jacktook"
+msgstr ""
+
+msgctxt "#90816"
+msgid "Support Jacktook development with an optional Ko-fi donation."
+msgstr ""
+
+msgctxt "#90817"
+msgid "Scan the QR code or open this link:"
+msgstr ""
+
+msgctxt "#90818"
+msgid "Jacktook was updated with new improvements. Donations are optional, but they help keep development active. Would you like to see the support link?"
+msgstr ""
+
+msgctxt "#90819"
+msgid "Rename Stremio add-on"
+msgstr ""
+
+msgctxt "#90820"
+msgid "Enter add-on alias."
+msgstr ""
+
+msgctxt "#90821"
+msgid "Stremio alias"
+msgstr ""
+
+msgctxt "#90822"
+msgid "Alias saved."
+msgstr ""
+
+msgctxt "#90823"
+msgid "Alias cleared."
+msgstr ""
+
+msgctxt "#90824"
+msgid "Rename Stremio catalog"
+msgstr ""
+
+msgctxt "#90825"
+msgid "Select catalog"
+msgstr ""
+
+msgctxt "#90826"
+msgid "Enter catalog alias."
+msgstr ""
+
+msgctxt "#90827"
+msgid "Set a Kodi-only display alias for a Stremio add-on."
+msgstr ""
+
+msgctxt "#90828"
+msgid "Set a Kodi-only display alias for a Stremio catalog."
+msgstr ""
+
+msgctxt "#90829"
+msgid "Edit"
+msgstr ""
+
+msgctxt "#90830"
+msgid "Clear"
+msgstr ""
+
+msgctxt "#90831"
+msgid "This item already has an alias. Do you want to clear it?"
+msgstr ""
+
+msgctxt "#90832"
+msgid "Stremio: Addons Management"
+msgstr ""
+
+msgctxt "#90833"
+msgid "Stremio: Catalogs & Visibility"
+msgstr ""
+
+msgctxt "#90834"
+msgid "Stremio: Rename & Customization"
+msgstr ""
+
+msgctxt "#90835"
+msgid "Stremio: Search & Behavior"
+msgstr ""
+
+msgctxt "#90300"
+msgid "External Scraper"
+msgstr ""
+
+msgctxt "#90301"
+msgid "Enable external scraper module integration."
+msgstr ""
+
+msgctxt "#90302"
+msgid "Choose External Scraper Module"
+msgstr ""
+
+msgctxt "#90303"
+msgid "Select an external scraper addon module to use for torrent search."
+msgstr ""
+
+msgctxt "#90304"
+msgid "Choose External Scraper"
+msgstr ""
+
+msgctxt "#90305"
+msgid "Selected Module"
+msgstr ""
+
+msgctxt "#90306"
+msgid "Open External Scraper Settings"
+msgstr ""
+
+msgctxt "#90307"
+msgid "Open the settings for the selected external scraper module."
+msgstr ""
+
+msgctxt "#30953"
+msgid "Select subtitle addons"
+msgstr ""
+
+msgctxt "#30954"
+msgid "Choose which installed Stremio addons to query for subtitles."
+msgstr ""
+
+msgctxt "#30955"
+msgid "No subtitle-capable addons found."
+msgstr ""
+
+msgctxt "#30956"
+msgid "Use integrated OpenSubtitles"
+msgstr ""
+
+msgctxt "#30957"
+msgid "Queries the integrated OpenSubtitles service with the current video ID and, when available, filename, size, and video hash. Disable this to prevent those requests."
+msgstr ""
+
+msgctxt "#90958"
+msgid "Yamtrack"
+msgstr ""
+
+msgctxt "#90959"
+msgid "Sync completed playback to Yamtrack"
+msgstr ""
+
+msgctxt "#90960"
+msgid "Yamtrack base URL"
+msgstr ""
+
+msgctxt "#90961"
+msgid "Yamtrack webhook token"
+msgstr ""
+
+msgctxt "#90962"
+msgid "MDbList"
+msgstr ""
+
+msgctxt "#90963"
+msgid "Uncategorized"
+msgstr ""
+
+msgctxt "#90964"
+msgid "The installed version is newer than the version published in the repository."
+msgstr "The installed version is newer than the version published in the repository."
+
+msgctxt "#90999"
+msgid "Clear Continue Watching"
+msgstr "Clear Continue Watching"
+
+msgctxt "#91001"
+msgid "Continue Watching cleared"
+
+msgctxt "#91002"
+msgid "Nuvio: Account"
+msgstr "Nuvio: Account"
+
+msgctxt "#91003"
+msgid "Enable"
+msgstr "Enable"
+
+msgctxt "#91004"
+msgid "Push your Jacktook movie and TV episode watch progress to Nuvio when playback stops."
+msgstr "Push your Jacktook movie and TV episode watch progress to Nuvio when playback stops."
+
+msgctxt "#91005"
+msgid "Connect Nuvio with QR Code"
+msgstr "Connect Nuvio with QR Code"
+
+msgctxt "#91006"
+msgid "Scan the QR code with a signed-in Nuvio device, then select the profile that receives watch-progress updates."
+msgstr "Scan the QR code with a signed-in Nuvio device, then select the profile that receives watch-progress updates."
+
+msgctxt "#91007"
+msgid "Sign Out of Nuvio"
+msgstr "Sign Out of Nuvio"
+
+msgctxt "#91008"
+msgid "Remove the saved Nuvio session and selected profile from Jacktook."
+msgstr "Remove the saved Nuvio session and selected profile from Jacktook."
+
+msgctxt "#91009"
+msgid "Nuvio connection cancelled."
+msgstr "Nuvio connection cancelled."
+
+msgctxt "#91010"
+msgid "Nuvio authorization expired. Start the QR connection again."
+msgstr "Nuvio authorization expired. Start the QR connection again."
+
+msgctxt "#91011"
+msgid "Nuvio authorization was already used or cancelled. Start the QR connection again."
+msgstr "Nuvio authorization was already used or cancelled. Start the QR connection again."
+
+msgctxt "#91012"
+msgid "Nuvio could not start QR authorization. Please try again."
+msgstr "Nuvio could not start QR authorization. Please try again."
+
+msgctxt "#91013"
+msgid "Nuvio authorization check failed. Please try again."
+msgstr "Nuvio authorization check failed. Please try again."
+
+msgctxt "#91014"
+msgid "Nuvio authorization exchange failed. Please try again."
+msgstr "Nuvio authorization exchange failed. Please try again."
+
+msgctxt "#91015"
+msgid "Unable to load Nuvio profiles. Please try again."
+msgstr "Unable to load Nuvio profiles. Please try again."
+
+msgctxt "#91016"
+msgid "Nuvio watch-progress sync connected."
+msgstr "Nuvio watch-progress sync connected."
+
+msgctxt "#91017"
+msgid "Choose Nuvio profile"
+msgstr "Choose Nuvio profile"
+
+msgctxt "#91018"
+msgid "Nuvio: Addons Management"
+msgstr "Nuvio: Addons Management"
+
+msgctxt "#91019"
+msgid "Select Nuvio Addons"
+msgstr "Select Nuvio Addons"
+
+msgctxt "#91020"
+msgid "Select the enabled Nuvio addons to use for stream searches."
+msgstr "Select the enabled Nuvio addons to use for stream searches."
+
+msgctxt "#91021"
+msgid "No usable Nuvio addons are available."
+msgstr "No usable Nuvio addons are available."
+
+msgctxt "#91022"
+msgid "Nuvio addons could not be loaded. Your saved selection was not changed."
+msgstr "Nuvio addons could not be loaded. Your saved selection was not changed."
+
+msgctxt "#91023"
+msgid "Nuvio: Watch Progress"
+msgstr "Nuvio: Watch Progress"
+
+msgctxt "#91024"
+msgid "Nuvio: Watch History"
+msgstr "Nuvio: Watch History"
+
+msgctxt "#91025"
+msgid "No Nuvio watch progress available."
+msgstr "No Nuvio watch progress available."
+
+msgctxt "#91026"
+msgid "No Nuvio watch history available."
+msgstr "No Nuvio watch history available."
+
+msgctxt "#91027"
+msgid "Remove from Nuvio"
+msgstr "Remove from Nuvio"
+
+msgctxt "#91028"
+msgid "Removed from Nuvio Continue Watching"
+msgstr "Removed from Nuvio Continue Watching"
+
+msgctxt "#91029"
+msgid "Could not remove Nuvio watch progress."
+msgstr "Could not remove Nuvio watch progress."
+
+msgctxt "#91030"
+msgid "About"
+msgstr "About"
+
+msgctxt "#91031"
+msgid "Version"
+msgstr "Version"
+
+msgctxt "#91032"
+msgid "My Nuvio Movies"
+msgstr "My Nuvio Movies"
+
+msgctxt "#91033"
+msgid "My Nuvio Shows"
+msgstr "My Nuvio Shows"
+
+msgctxt "#91034"
+msgid "No Nuvio library items available."
+msgstr "No Nuvio library items available."
+
+msgctxt "#91035"
+msgid "Nuvio: Library Sync"
+msgstr "Nuvio: Library Sync"
+
+msgctxt "#91036"
+msgid "Sync interval (minutes)"
+msgstr "Sync interval (minutes)"
+
+msgctxt "#91037"
+msgid "How often Nuvio library changes are pulled, in minutes (minimum 1)."
+msgstr "How often Nuvio library changes are pulled, in minutes (minimum 1)."
+
+msgctxt "#91038"
+msgid "Nuvio"
+msgstr "Nuvio"
+
+msgctxt "#91039"
+msgid "Add to Nuvio Library"
+msgstr "Add to Nuvio Library"
+
+msgctxt "#91040"
+msgid "Remove from Nuvio Library"
+msgstr "Remove from Nuvio Library"
+
+msgctxt "#91041"
+msgid "Added to Nuvio Library"
+msgstr "Added to Nuvio Library"
+
+msgctxt "#91042"
+msgid "Removed from Nuvio Library"
+msgstr "Removed from Nuvio Library"
+
+msgctxt "#91043"
+msgid "Could not update the Nuvio library."
+msgstr "Could not update the Nuvio library."
+
+msgctxt "#91044"
+msgid "Mark as Watched on Nuvio"
+msgstr "Mark as Watched on Nuvio"
+
+msgctxt "#91045"
+msgid "Mark as Unwatched on Nuvio"
+msgstr "Mark as Unwatched on Nuvio"
+
+msgctxt "#91046"
+msgid "Marked as watched on Nuvio."
+msgstr "Marked as watched on Nuvio."
+
+msgctxt "#91047"
+msgid "Removed from Nuvio history."
+msgstr "Removed from Nuvio history."
+
+msgctxt "#91048"
+msgid "Could not update Nuvio history."
+msgstr "Could not update Nuvio history."
+
+msgctxt "#91049"
+msgid "Remove from Nuvio History?"
+msgstr "Remove from Nuvio History?"
+
+msgctxt "#91050"
+msgid "This removes the item from your Nuvio watch history. Continue?"
+msgstr "This removes the item from your Nuvio watch history. Continue?"
+
+msgctxt "#91051"
+msgid "Collections"
+msgstr "Collections"
+
+msgctxt "#91052"
+msgid "No Nuvio collections available."
+msgstr "No Nuvio collections available."
+
+msgctxt "#91053"
+msgid "Addon not installed"
+msgstr "Addon not installed"
+
+msgctxt "#91054"
+msgid "This catalog's addon is not installed in Nuvio."
+msgstr "This catalog's addon is not installed in Nuvio."
+
+msgctxt "#91055"
+msgid "This collection source is not supported yet."
+msgstr "This collection source is not supported yet."
+
+msgctxt "#91056"
+msgid "No results found."
+msgstr "No results found."
+
+msgctxt "#91060"
+msgid "Anime"
+msgstr "Anime"
+
+msgctxt "#91061"
+msgid "Anime title language"
+msgstr "Anime title language"
+
+msgctxt "#91062"
+msgid "Preferred language for anime titles."
+msgstr "Preferred language for anime titles."
+
+msgctxt "#91063"
+msgid "Romaji"
+msgstr "Romaji"
+
+msgctxt "#91058"
+msgid "Installing %s. Try playback again once it finishes."
+msgstr "Installing %s. Try playback again once it finishes."
+
+msgctxt "#91059"
+msgid "Playback could not be started. Check that your torrent client addon is installed and enabled."
+msgstr "Playback could not be started. Check that your torrent client addon is installed and enabled."

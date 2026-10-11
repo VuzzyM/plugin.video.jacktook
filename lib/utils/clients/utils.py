@@ -1,12 +1,18 @@
 from typing import Any, Callable, Dict, Optional
-from lib.utils.kodi.utils import get_setting, notification, translation
+from urllib.parse import urlparse
+
 from lib.utils.general.utils import Indexer
 from lib.utils.kodi.settings import get_int_setting
+from lib.utils.kodi.utils import get_setting, notification, translation
 
 
 def validate_host(host: Optional[str], indexer: str) -> Optional[bool]:
-    if not host:
+    if not host or not host.strip():
         notification(f"{translation(30223)}: {indexer}")
+        return None
+    parsed = urlparse(host.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        notification(translation(30258) % indexer)
         return None
     return True
 
@@ -23,17 +29,13 @@ def update_dialog(title: str, message: str, dialog: Any, percent: int = 0) -> No
         dialog.update(percent, translation(90661) % title, message)
 
 
-def validate_credentials(
-    indexer: str, host: Optional[str], api_key: Optional[str] = None
-) -> bool:
+def validate_credentials(indexer: str, host: Optional[str], api_key: Optional[str] = None) -> bool:
     """
     Validates the host and API key for a given indexer.
     """
     if not validate_host(host, indexer):
         return False
-    if api_key is not None and not validate_key(api_key, indexer):
-        return False
-    return True
+    return not (api_key is not None and not validate_key(api_key, indexer))
 
 
 def build_jackett_client() -> Optional[object]:
@@ -95,9 +97,32 @@ def build_easynews_client() -> Optional[object]:
     password = str(get_setting("easynews_password"))
     timeout = get_int_setting("easynews_timeout")
 
-    if not validate_credentials(Indexer.EASYNEWS, user, password):
+    if not validate_key(user, Indexer.EASYNEWS) or not validate_key(password, Indexer.EASYNEWS):
         return None
     return Easynews(user, password, timeout, notification)
+
+
+def build_external_scraper_client() -> Optional[object]:
+    from lib.clients.external_scraper import ExternalScraperClient
+    from lib.utils.kodi.utils import kodilog
+
+    kodilog("[ExternalScraper] build_external_scraper_client() called")
+
+    module_id = get_setting("external_scraper_module")
+    if not module_id:
+        return None
+
+    module_display_name = (
+        get_setting("external_scraper_module_name") or module_id.split(".")[-1].title()
+    )
+    client = ExternalScraperClient(module_id, module_display_name, notification)
+    kodilog(
+        f"[ExternalScraper] initialized={client.initialized}, "
+        f"providers={len(client._providers) if client._providers else 0}"
+    )
+    if not client.initialized:
+        return None
+    return client
 
 
 CLIENT_BUILDERS: Dict[str, Callable[[], Optional[object]]] = {
@@ -106,6 +131,7 @@ CLIENT_BUILDERS: Dict[str, Callable[[], Optional[object]]] = {
     Indexer.JACKGRAM: build_jackgram_client,
     Indexer.BURST: build_burst_client,
     Indexer.EASYNEWS: build_easynews_client,
+    Indexer.EXTERNAL_SCRAPER: build_external_scraper_client,
 }
 
 

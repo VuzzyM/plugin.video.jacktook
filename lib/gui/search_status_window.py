@@ -1,15 +1,13 @@
-from dataclasses import dataclass, field
-from typing import List, Optional, Callable, Dict, Any
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import Callable, List, Optional
 
 import xbmc
-import xbmcgui
 
-from lib.utils.kodi.utils import kodilog, translation
-from lib.gui.base_window import BaseWindow
 from lib.domain.torrent import TorrentStream
-
+from lib.gui.base_window import BaseWindow
+from lib.utils.kodi.utils import kodilog, translation
 
 STATUS_MAP = {
     "Pending": 90244,
@@ -24,9 +22,7 @@ STATUS_MAP = {
 class SearchTask:
     name: str
     indexer_key: str
-    status: str = (
-        "Pending"  # "Pending", "In Progress", "Completed", "Failed", "Cancelled"
-    )
+    status: str = "Pending"  # "Pending", "In Progress", "Completed", "Failed", "Cancelled"
     result_count: int = 0
     error: str = ""
     future: Optional[Future] = None
@@ -37,19 +33,19 @@ class SearchTaskManager:
         self.executor = executor
         self.tasks: List[SearchTask] = []
         self._cancel_event = threading.Event()
+        self._lock = threading.RLock()
 
-    def submit_task(
-        self, name: str, indexer_key: str, fn: Callable, *args, **kwargs
-    ) -> SearchTask:
+    def submit_task(self, name: str, indexer_key: str, fn: Callable, *args, **kwargs) -> SearchTask:
         task = SearchTask(name=name, indexer_key=indexer_key)
-        self.tasks.append(task)
+        with self._lock:
+            self.tasks.append(task)
 
         def wrapped_fn(*a, **kw):
             if self._cancel_event.is_set():
-                task.status = "Cancelled"
+                self._update_task(task, status="Cancelled")
                 return []
 
-            task.status = "In Progress"
+            self._update_task(task, status="In Progress")
             try:
                 # ARTIFICIAL DELAY FOR TESTING GUI UPDATES
                 # xbmc.sleep(8000)
@@ -57,15 +53,17 @@ class SearchTaskManager:
                 results = fn(*a, **kw)
 
                 if self._cancel_event.is_set():
-                    task.status = "Cancelled"
+                    self._update_task(task, status="Cancelled")
                     return results if results else []
 
-                task.status = "Completed"
-                task.result_count = len(results) if results else 0
+                self._update_task(
+                    task,
+                    status="Completed",
+                    result_count=len(results) if results else 0,
+                )
                 return results
             except Exception as e:
-                task.status = "Failed"
-                task.error = str(e)
+                self._update_task(task, status="Failed", error=str(e))
                 kodilog(f"Task {name} failed: {e}")
                 return []
 
@@ -75,10 +73,11 @@ class SearchTaskManager:
 
     def cancel_pending(self):
         self._cancel_event.set()
-        for task in self.tasks:
-            if task.status in ["Pending", "In Progress"]:
-                if task.future and getattr(task.future, "cancel", lambda: False)():
-                    task.status = "Cancelled"
+        with self._lock:
+            for task in self.tasks:
+                if task.status in ["Pending", "In Progress"]:
+                    if not task.future or getattr(task.future, "cancel", lambda: False)():
+                        task.status = "Cancelled"
 
     @property
     def is_cancelled(self) -> bool:
@@ -86,11 +85,42 @@ class SearchTaskManager:
 
     @property
     def is_complete(self) -> bool:
-        return all(t.status in ["Completed", "Failed", "Cancelled"] for t in self.tasks)
+        with self._lock:
+            return all(t.status in ["Completed", "Failed", "Cancelled"] for t in self.tasks)
+
+    def _update_task(
+        self,
+        task: SearchTask,
+        status: Optional[str] = None,
+        result_count: Optional[int] = None,
+        error: Optional[str] = None,
+    ):
+        with self._lock:
+            if status is not None:
+                task.status = status
+            if result_count is not None:
+                task.result_count = result_count
+            if error is not None:
+                task.error = error
+
+    def snapshot_tasks(self) -> List[SearchTask]:
+        with self._lock:
+            return [
+                SearchTask(
+                    name=task.name,
+                    indexer_key=task.indexer_key,
+                    status=task.status,
+                    result_count=task.result_count,
+                    error=task.error,
+                )
+                for task in self.tasks
+            ]
 
     def collect_results(self) -> List[TorrentStream]:
         total_results = []
-        for task in self.tasks:
+        with self._lock:
+            tasks = list(self.tasks)
+        for task in tasks:
             if task.future and task.future.done():
                 try:
                     res = task.future.result()
@@ -120,20 +150,7 @@ class SearchStatusWindow(BaseWindow):
         self.setProperty("instant_close", "false")
 
         # Set initial task names so they appear immediately
-        for i, task in enumerate(self.task_manager.tasks):
-            if i >= self.MAX_TASK_SLOTS:
-                break
-            self.setProperty(f"task_{i}_name", task.name)
-            self.setProperty(
-                f"task_{i}_status", translation(STATUS_MAP.get(task.status, 90244))
-            )
-            self.setProperty(f"task_{i}_color", self._get_status_color(task.status))
-            self.setProperty(f"task_{i}_results", "")
-
-        # Start background update thread
-        self._update_thread = threading.Thread(target=self._update_loop)
-        self._update_thread.daemon = True
-        self._update_thread.start()
+        self._update_ui_state()
 
     def _get_status_color(self, status: str) -> str:
         if status == "Pending":
@@ -148,9 +165,9 @@ class SearchStatusWindow(BaseWindow):
             return "FFFFA500"  # Orange
         return "FFFFFFFF"  # White
 
-    def _update_loop(self):
+    def run_until_complete(self, poll_interval_ms=250, final_delay_ms=500):
         while not self._monitor.abortRequested() and not self.task_manager.is_complete:
-            xbmc.sleep(250)
+            xbmc.sleep(poll_interval_ms)
 
             if self.task_manager.is_cancelled:
                 break
@@ -162,16 +179,17 @@ class SearchStatusWindow(BaseWindow):
 
         # Give user a brief moment to see final state if not cancelled
         if not self.task_manager.is_cancelled:
-            xbmc.sleep(500)
+            xbmc.sleep(final_delay_ms)
 
         self.close()
 
     def _update_ui_state(self):
-        total_tasks = len(self.task_manager.tasks)
+        tasks = self.task_manager.snapshot_tasks()
+        total_tasks = len(tasks)
         completed_tasks = 0
         total_results = 0
 
-        for i, task in enumerate(self.task_manager.tasks):
+        for i, task in enumerate(tasks):
             if i >= self.MAX_TASK_SLOTS:
                 break
 
@@ -185,16 +203,21 @@ class SearchStatusWindow(BaseWindow):
             if task.status == "Completed":
                 completed_tasks += 1
                 self.setProperty(f"task_{i}_results", str(task.result_count))
+                self.setProperty(f"task_{i}_show_spinner", "")
             elif task.status in ["Failed", "Cancelled"]:
                 completed_tasks += 1
                 self.setProperty(f"task_{i}_results", "")
+                self.setProperty(f"task_{i}_show_spinner", "")
             elif task.status == "In Progress":
                 self.setProperty(
                     f"task_{i}_results",
                     str(task.result_count) if task.result_count > 0 else "",
                 )
+                show_spinner = "true" if task.result_count == 0 else ""
+                self.setProperty(f"task_{i}_show_spinner", show_spinner)
             else:
                 self.setProperty(f"task_{i}_results", "")
+                self.setProperty(f"task_{i}_show_spinner", "")
 
         # Update progress
         if total_tasks > 0:

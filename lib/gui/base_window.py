@@ -1,16 +1,21 @@
 import abc
-from copy import deepcopy
 import hashlib
 import json
+from copy import deepcopy
 from typing import Any, Dict, Tuple
-from lib.domain.torrent import TorrentStream
-from lib.utils.debrid.debrid_utils import get_magnet_from_uri, _is_torrent_ready_in_debrid
-from lib.utils.player.utils import resolve_playback_url
-from lib.utils.general.utils import Indexer, IndexerType, truncate_text
-from lib.utils.kodi.logging import summarize_locator_for_log
-from lib.utils.kodi.utils import ADDON, kodilog, translation
+
 import xbmcgui
 
+from lib.domain.torrent import TorrentStream
+from lib.utils.debrid.debrid_utils import (
+    _is_torrent_ready_in_debrid,
+    get_magnet_from_uri,
+)
+from lib.utils.general.utils import Indexer, IndexerType, truncate_text
+from lib.utils.kodi.logging import summarize_locator_for_log
+from lib.utils.parsers.pack_parser import detect_pack_scope
+from lib.utils.kodi.utils import ADDON, kodilog, translation
+from lib.clients.stremio.playback import resolve_stremio_playback_url
 
 ACTION_PREVIOUS_MENU = 10
 ACTION_PLAYER_STOP = 13
@@ -65,9 +70,7 @@ class BaseWindow(xbmcgui.WindowXMLDialog):
         cache_hash = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()
         return f"jacktook.focus.{cache_hash}"
 
-    def set_default_focus(
-        self, control_list=None, control_id=None, control_list_reset=False
-    ):
+    def set_default_focus(self, control_list=None, control_id=None, control_list_reset=False):
         try:
             # Retrieve cached focus if available
             control_id, item_id = self.get_cached_focus()
@@ -97,12 +100,10 @@ class BaseWindow(xbmcgui.WindowXMLDialog):
             control = self.getControl(control_id)
         except RuntimeError as e:
             kodilog(f"Control does not exist {control_id}", {e})
-            raise ValueError(f"Control with Id {control_id} does not exist")
+            raise ValueError(f"Control with Id {control_id} does not exist") from e
 
         if not isinstance(control, xbmcgui.ControlList):
-            raise AttributeError(
-                f"Control with Id {control_id} should be of type ControlList"
-            )
+            raise AttributeError(f"Control with Id {control_id} should be of type ControlList")
         return control
 
     def add_item_information_to_window(self, item_information):
@@ -119,9 +120,7 @@ class BaseWindow(xbmcgui.WindowXMLDialog):
     def getControlProgress(self, control_id):
         control = self.getControl(control_id)
         if not isinstance(control, xbmcgui.ControlProgress):
-            raise AttributeError(
-                f"Control with Id {control_id} should be of type ControlProgress"
-            )
+            raise AttributeError(f"Control with Id {control_id} should be of type ControlProgress")
 
         return control
 
@@ -140,33 +139,30 @@ class BaseWindow(xbmcgui.WindowXMLDialog):
 
     def _ensure_playback_info(self, source: TorrentStream):
         url, magnet, is_torrent = self._extract_source_details(source)
-        
+
         if source.addedToDebrid and source.debridType and source.infoHash:
             is_ready = _is_torrent_ready_in_debrid(source.debridType, source.infoHash)
             if not is_ready:
                 dialog = xbmcgui.Dialog()
-                message = (
-                    f"{translation(90696) % source.debridType}\n\n"
-                    f"{translation(90697)}"
-                )
+                message = f"{translation(90696) % source.debridType}\n\n{translation(90697)}"
                 choice = dialog.yesno(
                     translation(90695),
                     message,
                     yeslabel=translation(90698),
-                    nolabel=translation(90699)
+                    nolabel=translation(90699),
                 )
                 if not choice:
                     return {}
                 source.addedToDebrid = False
                 source.debridType = ""
-        
+
         source_data = self.prepare_source_data(
             source=source,
             url=url,
             magnet=magnet,
             is_torrent=is_torrent,
         )
-        return resolve_playback_url(source_data) or {}
+        return resolve_stremio_playback_url(source_data) or {}
 
     def _extract_source_details(self, source: TorrentStream) -> Tuple[str, str, bool]:
         url = source.url or ""
@@ -193,22 +189,19 @@ class BaseWindow(xbmcgui.WindowXMLDialog):
         if guid.startswith("magnet:?"):
             magnet = guid
         # Handle Burst indexer
-        elif indexer == Indexer.BURST:
-            url = guid
-        # Prefer .torrent in guid or url
-        elif guid.endswith(".torrent"):
+        elif indexer == Indexer.BURST or guid.endswith(".torrent"):
             url = guid
         elif url.endswith(".torrent"):
             pass
 
-        # Try to extract magnet from url 
+        # Try to extract magnet from url
         if url.startswith("http") and not url.endswith(".torrent"):
             magnet_candidate, _, torrent_url = get_magnet_from_uri(url)
             if torrent_url:
                 url = torrent_url
             elif magnet_candidate:
                 magnet = magnet_candidate
-                
+
         # Try to extract magnet from guid if it's a details page
         elif not magnet and guid.startswith("http"):
             magnet_candidate, _, torrent_url = get_magnet_from_uri(guid)
@@ -218,7 +211,7 @@ class BaseWindow(xbmcgui.WindowXMLDialog):
                 url = torrent_url
 
         # --- Fallback: magnet from url ---
-        if not magnet and url.startswith("magnet:?"):
+        if not magnet and url.startswith("magnet:"):
             magnet, url = url, ""
 
         # --- Fallback: magnet from infoHash ---
@@ -231,12 +224,7 @@ class BaseWindow(xbmcgui.WindowXMLDialog):
             used_infohash_fallback = True
 
         kodilog(
-            "Source extraction output: url={!r}, magnet={!r}, is_torrent={}, used_infohash_fallback={}".format(
-                summarize_locator_for_log(url),
-                summarize_locator_for_log(magnet),
-                is_torrent,
-                used_infohash_fallback,
-            )
+            f"Source extraction output: url={summarize_locator_for_log(url)!r}, magnet={summarize_locator_for_log(magnet)!r}, is_torrent={is_torrent}, used_infohash_fallback={used_infohash_fallback}"
         )
 
         return url, magnet, is_torrent
@@ -250,20 +238,63 @@ class BaseWindow(xbmcgui.WindowXMLDialog):
         pack_select: bool = False,
     ) -> Dict[str, Any]:
         """Prepare the source data dictionary for resolving playback."""
-        return {
+        tv_data = self.item_information.get("tv_data")
+        current_season = tv_data.get("season") if isinstance(tv_data, dict) else None
+        pack_scope = detect_pack_scope(
+            source.title,
+            current_season=current_season,
+            source_is_pack=bool(source.isPack or pack_select),
+        )
+        kodilog(
+            "Playback pack scope: type={!r}, seasons={!r}, reason={!r}, source={!r}".format(
+                pack_scope["pack_type"],
+                pack_scope["pack_seasons"],
+                pack_scope["pack_reason"],
+                source.title,
+            )
+        )
+
+        playback_data = {
             "type": source.type,
-            "debrid_type": source.debridType,
             "indexer": source.indexer,
             "url": url,
             "magnet": magnet,
             "info_hash": source.infoHash,
-            "title": self.item_information.get("title") or self.item_information.get("query") or source.title,
+            "title": self.item_information.get("title")
+            or self.item_information.get("query")
+            or source.title,
+            "source_title": source.title,
             "is_torrent": is_torrent,
-            "is_pack": pack_select,
+            "is_pack": pack_scope["is_pack"],
+            "pack_type": pack_scope["pack_type"],
+            "pack_seasons": pack_scope["pack_seasons"],
+            "pack_reason": pack_scope["pack_reason"],
             "mode": self.item_information.get("mode"),
             "ids": self.item_information.get("ids"),
-            "tv_data": self.item_information.get("tv_data"),
+            "tv_data": tv_data,
+            "poster": self.item_information.get("poster"),
+            "description": self.item_information.get("overview") or "",
+            "stream_subtitles": source.streamSubtitles,
         }
+        metadata = source.stremioMetadata
+        if metadata is None:
+            metadata = {}
+        elif not isinstance(metadata, dict):
+            metadata = {"_invalid_stremio_metadata": True}
+        if source.debridType:
+            playback_data["debrid_type"] = source.debridType
+        if metadata:
+            playback_data["stremio_metadata"] = dict(metadata)
+        behavior_hints = metadata.get("behaviorHints") or {}
+        for source_key, target_key in (
+            ("videoHash", "videoHash"),
+            ("videoSize", "size"),
+            ("filename", "filename"),
+        ):
+            value = metadata.get(source_key, behavior_hints.get(source_key))
+            if value is not None:
+                playback_data[target_key] = value
+        return playback_data
 
     @abc.abstractmethod
     def handle_action(self, action_id, control_id=None):

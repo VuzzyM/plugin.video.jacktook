@@ -1,21 +1,29 @@
-import pytest
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
+
+import pytest
+
 from lib.utils.general.utils import (
-    is_url,
-    is_magnet_link,
-    info_hash_to_magnet,
-    supported_video_extensions,
+    TMDB_IMAGE_SIZES,
+    add_next_button,
+    build_media_metadata,
+    cache_results,
     extract_publish_date,
     extract_release_group,
-    unicode_flag_to_country_code,
-    is_video,
-    get_random_color,
     format_season_episode,
+    get_cached_results,
     get_image_size,
-    set_listitem_artwork,
-    TMDB_IMAGE_SIZES,
+    get_random_color,
     get_rpdb_poster,
-    build_media_metadata,
+    info_hash_to_magnet,
+    is_magnet_link,
+    is_url,
+    is_video,
+    normalize_tv_data,
+    set_listitem_artwork,
+    supported_video_extensions,
+    tmdb_url,
+    unicode_flag_to_country_code,
 )
 
 
@@ -78,6 +86,29 @@ def test_is_video():
     assert is_video("archive.zip") is False
 
 
+@pytest.mark.parametrize(
+    "page, expected_next_page",
+    [
+        (1, 2),
+        (2, 3),
+    ],
+)
+def test_add_next_button_labels_and_links_to_next_page(page, expected_next_page):
+    list_item = MagicMock()
+
+    with patch(
+        "lib.utils.general.utils.make_list_item", return_value=list_item
+    ) as make_item, patch("lib.utils.general.utils.addDirectoryItem") as add_directory_item:
+        add_next_button("list_movies", page=page, genre="drama")
+
+    make_item.assert_called_once_with(label=f"Next ({expected_next_page})")
+    next_url = add_directory_item.call_args.args[1]
+    params = parse_qs(urlparse(next_url).query)
+    assert params["action"] == ["list_movies"]
+    assert params["page"] == [str(expected_next_page)]
+    assert params["genre"] == ["drama"]
+
+
 def test_get_random_color():
     color = get_random_color("Netflix")
     # Expected format: [B][COLOR FFRRGGBB]Netflix[/COLOR][/B]
@@ -101,6 +132,46 @@ def test_format_season_episode(season, episode, expected):
     assert format_season_episode(season, episode) == expected
 
 
+def test_normalize_tv_data_decodes_episode_name_and_preserves_number_coercion():
+    tv_data = {
+        "name": "The%20Scales%20%26%20the%20Sword",
+        "season": "2",
+        "episode": "3",
+    }
+
+    normalized = normalize_tv_data(tv_data)
+
+    assert normalized["name"] == "The Scales & the Sword"
+    assert normalized["season"] == 2
+    assert normalized["episode"] == 3
+
+
+def test_episode_result_cache_keys_include_season_and_preserve_movie_key():
+    with patch("lib.utils.general.utils.set_cached") as set_cached:
+        cache_results(["season 1"], "Show", "tv", "tv", 1, 1, cache_scope="scope")
+        cache_results(["season 2"], "Show", "tv", "tv", 1, 2, cache_scope="scope")
+        cache_results(["movie"], "Movie", "movies", "movie", 0, 0, cache_scope="scope")
+
+    assert set_cached.call_args_list[0].kwargs["params"] == (1, 1, "index", "scope")
+    assert set_cached.call_args_list[1].kwargs["params"] == (2, 1, "index", "scope")
+    assert set_cached.call_args_list[2].kwargs["params"] == ("index", "scope")
+
+    with patch("lib.utils.general.utils.get_cached") as get_cached:
+        get_cached_results("Show", "anime", "tv", 1, 1, cache_scope="scope")
+        get_cached_results("Show", "anime", "tv", 1, 2, cache_scope="scope")
+
+    assert get_cached.call_args_list[0].kwargs["params"] == (1, 1, "index", "scope")
+    assert get_cached.call_args_list[1].kwargs["params"] == (2, 1, "index", "scope")
+
+
+def test_normalize_tv_data_keeps_decoded_episode_name_stable():
+    normalized = normalize_tv_data({"name": "The Scales & the Sword", "season": 2, "episode": 3})
+
+    assert normalized["name"] == "The Scales & the Sword"
+    assert normalized["season"] == 2
+    assert normalized["episode"] == 3
+
+
 class TestGetImageSize:
     @pytest.mark.parametrize(
         "setting_value, expected_sizes",
@@ -112,24 +183,27 @@ class TestGetImageSize:
         ],
     )
     def test_maps_setting_to_tier(self, setting_value, expected_sizes):
-        with patch(
-            "lib.utils.general.utils.get_setting_fresh", return_value=setting_value
-        ):
-            for image_type in ("poster", "thumb", "profile", "fanart"):
+        with patch("lib.utils.general.utils.get_setting_fresh", return_value=setting_value):
+            for image_type in ("poster", "thumb", "profile", "fanart", "still"):
                 assert get_image_size(image_type) == expected_sizes[image_type]
 
     def test_invalid_setting_defaults_to_high(self):
-        with patch(
-            "lib.utils.general.utils.get_setting_fresh", return_value="99"
-        ):
+        with patch("lib.utils.general.utils.get_setting_fresh", return_value="99"):
             assert get_image_size("poster") == TMDB_IMAGE_SIZES["high"]["poster"]
             assert get_image_size("fanart") == TMDB_IMAGE_SIZES["high"]["fanart"]
 
     def test_unknown_image_type_returns_empty_string(self):
-        with patch(
-            "lib.utils.general.utils.get_setting_fresh", return_value="2"
-        ):
+        with patch("lib.utils.general.utils.get_setting_fresh", return_value="2"):
             assert get_image_size("unknown_type") == ""
+
+    def test_reads_fresh_tier_for_each_call(self):
+        with patch(
+            "lib.utils.general.utils.get_setting_fresh", side_effect=["0", "3"]
+        ) as get_setting_fresh:
+            assert get_image_size("poster") == TMDB_IMAGE_SIZES["low"]["poster"]
+            assert get_image_size("poster") == TMDB_IMAGE_SIZES["original"]["poster"]
+
+        assert get_setting_fresh.call_count == 2
 
 
 class TestSetListitemArtwork:
@@ -159,9 +233,10 @@ class TestSetListitemArtwork:
         }
         with patch(
             "lib.utils.general.utils.get_setting_fresh", return_value=setting_value
-        ):
+        ) as get_setting_fresh:
             set_listitem_artwork(item, data, {})
 
+        get_setting_fresh.assert_called_once_with("image_resolution_tier", "2")
         assert item.setArt.called
         art_call = item.setArt.call_args
         assert poster_size in self._extract_url(art_call, "poster")
@@ -171,15 +246,94 @@ class TestSetListitemArtwork:
     def test_falls_back_when_no_paths(self):
         item = self._make_mock_item()
         data = {}
-        with patch(
-            "lib.utils.general.utils.get_setting_fresh", return_value="2"
-        ):
+        with patch("lib.utils.general.utils.get_setting_fresh", return_value="2"):
             set_listitem_artwork(item, data, {})
 
         assert item.setArt.called
         art_call = item.setArt.call_args
         assert self._extract_url(art_call, "poster") == ""
         assert self._extract_url(art_call, "fanart") == ""
+
+    def test_episode_still_fills_poster_slot_before_fanart_fallback(self):
+        item = self._make_mock_item()
+        data = {"still_path": "/still.jpg"}
+        fanart_data = {"poster": "https://assets.fanart.tv/showposter.jpg"}
+        with patch("lib.utils.general.utils.get_setting_fresh", return_value="2"):
+            set_listitem_artwork(item, data, fanart_data)
+
+        art_call = item.setArt.call_args
+        poster = self._extract_url(art_call, "poster")
+        thumb = self._extract_url(art_call, "thumb")
+        fanart = self._extract_url(art_call, "fanart")
+        icon = self._extract_url(art_call, "icon")
+        assert "/still.jpg" in poster
+        assert "/still.jpg" in thumb
+        assert "/still.jpg" in fanart
+        assert icon == thumb
+
+    def test_episode_still_preferred_over_fanart_show_poster_fallback(self):
+        item = self._make_mock_item()
+        data = {"still_path": "/still.jpg"}
+        fanart_data = {"poster": "https://assets.fanart.tv/showposter.jpg"}
+        with patch("lib.utils.general.utils.get_setting_fresh", return_value="2"):
+            set_listitem_artwork(item, data, fanart_data)
+
+        poster = self._extract_url(item.setArt.call_args, "poster")
+        assert poster == "https://image.tmdb.org/t/p/original/still.jpg"
+        assert poster != "https://assets.fanart.tv/showposter.jpg"
+
+    @pytest.mark.parametrize(
+        "setting_value, still_size",
+        [
+            ("0", "w185"),
+            ("1", "w300"),
+            ("2", "original"),
+            ("3", "original"),
+        ],
+    )
+    def test_episode_still_uses_documented_still_sizes(self, setting_value, still_size):
+        item = self._make_mock_item()
+        data = {"still_path": "/still.jpg"}
+        with patch("lib.utils.general.utils.get_setting_fresh", return_value=setting_value):
+            set_listitem_artwork(item, data, {})
+
+        art_call = item.setArt.call_args
+        for key in ("thumb", "fanart"):
+            url = self._extract_url(art_call, key)
+            assert f"/{still_size}/" in url
+            for off_spec_size in ("w342", "w780", "w1280"):
+                assert f"/{off_spec_size}/" not in url
+
+    def test_poster_path_wins_over_still_path_for_poster_slot(self):
+        item = self._make_mock_item()
+        data = {"poster_path": "/poster.jpg", "still_path": "/still.jpg"}
+        with patch("lib.utils.general.utils.get_setting_fresh", return_value="2"):
+            set_listitem_artwork(item, data, {})
+
+        art_call = item.setArt.call_args
+        poster = self._extract_url(art_call, "poster")
+        assert "/poster.jpg" in poster
+        assert "/w780/" in poster
+        assert "/still.jpg" not in poster
+        assert self._extract_url(art_call, "icon") == poster
+
+    def test_poster_path_wins_over_still_and_fanart_fallback_for_poster_slot(self):
+        item = self._make_mock_item()
+        data = {"poster_path": "/poster.jpg", "still_path": "/still.jpg"}
+        fanart_data = {"poster": "https://assets.fanart.tv/showposter.jpg"}
+        with patch("lib.utils.general.utils.get_setting_fresh", return_value="2"):
+            set_listitem_artwork(item, data, fanart_data)
+
+        poster = self._extract_url(item.setArt.call_args, "poster")
+        assert "/poster.jpg" in poster
+        assert "/still.jpg" not in poster
+        assert "assets.fanart.tv" not in poster
+
+
+def test_tmdb_url_uses_https_image_host():
+    assert tmdb_url("/poster.jpg", "w780") == "https://image.tmdb.org/t/p/w780/poster.jpg"
+    assert tmdb_url("", "w780") == ""
+    assert tmdb_url(None, "w780") == ""
 
 
 class TestGetRpdbPoster:
@@ -230,7 +384,8 @@ class TestGetRpdbPoster:
         with patch("lib.utils.general.utils.cache") as mock_cache:
             mock_cache.get.return_value = None
             with patch(
-                "requests.get", side_effect=req_mod.exceptions.RequestException("timeout")
+                "requests.get",
+                side_effect=req_mod.exceptions.RequestException("timeout"),
             ):
                 result = get_rpdb_poster("tt1234567", "test_key")
                 assert result is None
@@ -288,9 +443,7 @@ class TestBuildMediaMetadataRpdb:
                 "rpdb_api_key": "test_key",
             }.get(key, default),
         ):
-            with patch(
-                "lib.utils.general.utils.get_rpdb_poster", return_value=rpdb_url
-            ):
+            with patch("lib.utils.general.utils.get_rpdb_poster", return_value=rpdb_url):
                 with patch(
                     "lib.clients.tmdb.utils.utils.get_tmdb_media_details",
                     return_value=self._make_tmdb_details(),
@@ -312,9 +465,7 @@ class TestBuildMediaMetadataRpdb:
                 "rpdb_api_key": "test_key",
             }.get(key, default),
         ):
-            with patch(
-                "lib.utils.general.utils.get_rpdb_poster", return_value=None
-            ):
+            with patch("lib.utils.general.utils.get_rpdb_poster", return_value=None):
                 with patch(
                     "lib.clients.tmdb.utils.utils.get_tmdb_media_details",
                     return_value=self._make_tmdb_details(),
@@ -336,9 +487,7 @@ class TestBuildMediaMetadataRpdb:
                 "rpdb_api_key": "",
             }.get(key, default),
         ):
-            with patch(
-                "lib.utils.general.utils.get_rpdb_poster"
-            ) as mock_get_rpdb:
+            with patch("lib.utils.general.utils.get_rpdb_poster") as mock_get_rpdb:
                 with patch(
                     "lib.clients.tmdb.utils.utils.get_tmdb_media_details",
                     return_value=self._make_tmdb_details(),
@@ -361,9 +510,7 @@ class TestBuildMediaMetadataRpdb:
                 "rpdb_api_key": "test_key",
             }.get(key, default),
         ):
-            with patch(
-                "lib.utils.general.utils.get_rpdb_poster"
-            ) as mock_get_rpdb:
+            with patch("lib.utils.general.utils.get_rpdb_poster") as mock_get_rpdb:
                 with patch(
                     "lib.clients.tmdb.utils.utils.get_tmdb_media_details",
                     return_value=self._make_tmdb_details(),

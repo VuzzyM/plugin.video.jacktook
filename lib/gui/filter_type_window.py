@@ -1,4 +1,5 @@
 import xbmcgui
+
 from lib.gui.base_window import BaseWindow
 from lib.utils.kodi.utils import translation
 
@@ -27,6 +28,10 @@ class FilterTypeWindow(BaseWindow):
         language_item = xbmcgui.ListItem(label=translation(32303))
         language_item.setProperty("type", "language")
         self.list_control.addItem(language_item)
+
+        release_group_item = xbmcgui.ListItem(label=translation(32307))
+        release_group_item.setProperty("type", "release_group")
+        self.list_control.addItem(release_group_item)
 
         torrents_item = xbmcgui.ListItem(label=translation(32304))
         torrents_item.setProperty("type", "only_torrents")

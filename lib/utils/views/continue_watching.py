@@ -1,28 +1,36 @@
-# -*- coding: utf-8 -*-
-from lib.jacktook.utils import kodilog
 import json
 import os
+from urllib.parse import unquote
+
 from xbmc import executebuiltin
-from xbmcplugin import endOfDirectory, setContent
+from xbmcplugin import setContent
+
+from lib.db.pickle_db import PickleDatabase
+from lib.utils.general.utils import (
+    Indexer,
+    IndexerType,
+    clear_continue_watching_history,
+    format_season_episode,
+    set_pluging_category,
+    truncate_text,
+)
 from lib.utils.kodi.utils import (
-    ADDON_HANDLE,
     ADDON_PATH,
     add_directory_items_batch,
     apply_section_view,
     build_url,
+    end_of_directory,
+    get_addon_handle,
     make_list_item,
+    notification,
     translation,
 )
-from lib.db.pickle_db import PickleDatabase
-from lib.utils.general.utils import set_pluging_category
 from lib.utils.views.last_files import add_last_files_context_menu, parse_time
-from lib.utils.kodi.utils import end_of_directory
-from lib.utils.general.utils import format_season_episode, truncate_text
 
 
 def has_continue_watching_items():
     all_items = PickleDatabase().get_key("jt:lfh").items()
-    for title, data in all_items:
+    for _title, data in all_items:
         progress = float(data.get("progress", 0))
         if 5 < progress < 90:
             return True
@@ -31,24 +39,75 @@ def has_continue_watching_items():
 
 def remove_continue_watching_item(params):
     title = params.get("title")
+    if title == "__all__":
+        clear_continue_watching_history()
+        notification(translation(91001))
+        executebuiltin("Container.Refresh")
+        return
     if title:
         PickleDatabase().delete_item(key="jt:lfh", subkey=title)
         executebuiltin("Container.Refresh")
 
 
-def show_continue_watching():
+def _source_label(data):
+    """Best-effort human-readable source class for a stored playback payload."""
+    indexer = data.get("indexer", "")
+    name = data.get("name", "")
+    if indexer in (Indexer.JACKGRAM, Indexer.TELEGRAM) or name in (
+        Indexer.JACKGRAM,
+        Indexer.TELEGRAM,
+    ):
+        return str(indexer or name)
+    if data.get("indexer") == Indexer.EASYNEWS:
+        return "Easynews"
+    if data.get("debrid_type"):
+        return str(data["debrid_type"])
+    source_type = data.get("type", "")
+    if source_type == IndexerType.STREMIO_DEBRID:
+        return "Stremio"
+    if source_type == IndexerType.DEBRID:
+        return "Debrid"
+    if source_type == IndexerType.TORRENT:
+        return "Torrent"
+    if source_type == IndexerType.DIRECT:
+        return "Direct"
+    if data.get("is_torrent") or data.get("magnet") or data.get("info_hash"):
+        return "Torrent"
+    return ""
+
+
+def show_continue_watching(params=None):
+    if params is None:
+        params = {}
+
     set_pluging_category(translation(90200))
-    setContent(ADDON_HANDLE, "videos")
+    setContent(get_addon_handle(), "videos")
+
+    per_page = 10
+    page = int(params.get("page", 1))
 
     all_items = list(reversed(PickleDatabase().get_key("jt:lfh").items()))
     items = sorted(all_items, key=parse_time, reverse=True)
 
-    directory_items = []
+    # Filter by progress before slicing so pages stay dense
+    filtered_items = []
     for title, data in items:
-        # Check progress
         progress = float(data.get("progress", 0))
-        if progress <= 5 or progress >= 90:
-            continue
+        if 5 < progress < 90:
+            filtered_items.append((title, data))
+
+    total = len(filtered_items)
+    start = (page - 1) * per_page
+    end = start + per_page
+    items = filtered_items[start:end]
+
+    directory_items = []
+
+    for title, data in items:
+        label_title = data.get("title", "")
+        if isinstance(label_title, str):
+            data = dict(data)
+            data["title"] = unquote(label_title)
 
         tv_data = data.get("tv_data", {})
 
@@ -56,15 +115,17 @@ def show_continue_watching():
 
         if tv_data:
             show_name = tv_data.get("name", "")
-            episode_label = format_season_episode(
-                tv_data.get("season"), tv_data.get("episode")
-            )
+            episode_label = format_season_episode(tv_data.get("season"), tv_data.get("episode"))
             if episode_label:
                 label = f"{show_name or label_title} {episode_label}"
             else:
                 label = show_name or label_title
         else:
             label = label_title
+
+        source_label = _source_label(data)
+        if source_label:
+            label = f"{label} ({source_label})"
 
         list_item = make_list_item(label=label)
 
@@ -104,12 +165,28 @@ def show_continue_watching():
                 f"RunPlugin({build_url('remove_continue_watching', title=title)})",
             )
         )
+        context_menu.append(
+            (
+                translation(90999),
+                f"RunPlugin({build_url('remove_continue_watching', title='__all__')})",
+            )
+        )
         list_item.addContextMenuItems(context_menu)
 
         # url to play
         url = build_url("play_media", data=json.dumps(data))
 
         directory_items.append((url, list_item, False))
+
+    # "Next Page (N more)"
+    if end < total:
+        total_pages = -(-total // per_page)
+        remaining_pages = total_pages - page
+        list_item = make_list_item(label=f"Next Page ({remaining_pages} more)")
+        list_item.setArt({"icon": os.path.join(ADDON_PATH, "resources", "img", "nextpage.png")})
+        directory_items.append(
+            (build_url("continue_watching_menu", page=page + 1), list_item, True)
+        )
 
     add_directory_items_batch(directory_items)
 

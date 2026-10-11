@@ -1,7 +1,10 @@
-from lib.utils.general.utils import supported_video_extensions
-from lib.utils.kodi.utils import dialogyesno, notification, sleep as ksleep, translation
+import contextlib
+
 from xbmcgui import DialogProgress
 
+from lib.utils.general.utils import supported_video_extensions
+from lib.utils.kodi.utils import dialogyesno, notification, translation
+from lib.utils.kodi.utils import sleep as ksleep
 
 DEBRID_ERROR_STATUS = ("magnet_error", "error", "virus", "dead")
 
@@ -44,16 +47,12 @@ def run_realdebrid_download(client, magnet_url, pack=False):
             client, torrent_id, torrent_info, progress_dialog, interval, pack
         )
 
-    try:
+    with contextlib.suppress(Exception):
         progress_dialog.close()
-    except Exception:
-        pass
 
     ksleep(500)
     if cancelled:
-        response = dialogyesno(
-            translation(32029), translation(90564)
-        )
+        response = dialogyesno(translation(32029), translation(90564))
         if response:
             notification(translation(90641))
         else:

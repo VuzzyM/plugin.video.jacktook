@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
-from lib.utils.debrid.debrid_utils import get_magnet_from_uri
+from lib.domain.torrent import TorrentStream
+from lib.utils.debrid.debrid_utils import get_magnet_from_uri, get_source_status
 
 
 def test_get_magnet_from_uri_follows_redirect_to_magnet():
@@ -13,9 +14,7 @@ def test_get_magnet_from_uri_follows_redirect_to_magnet():
     with patch(
         "lib.utils.debrid.debrid_utils.requests.get", return_value=redirect_response
     ) as mock_get:
-        magnet, info_hash, torrent_url = get_magnet_from_uri(
-            "https://jackett.local/dl/test"
-        )
+        magnet, info_hash, torrent_url = get_magnet_from_uri("https://jackett.local/dl/test")
 
     assert magnet.startswith("magnet:?xt=urn:btih:1234567890ABCDEF")
     assert info_hash == "1234567890abcdef1234567890abcdef12345678"
@@ -38,9 +37,7 @@ def test_get_magnet_from_uri_follows_http_redirect_chain():
         "lib.utils.debrid.debrid_utils.requests.get",
         side_effect=[first_response, second_response],
     ) as mock_get:
-        magnet, info_hash, torrent_url = get_magnet_from_uri(
-            "https://jackett.local/dl/test"
-        )
+        magnet, info_hash, torrent_url = get_magnet_from_uri("https://jackett.local/dl/test")
 
     assert magnet.startswith("magnet:?xt=urn:btih:ABCDEF1234567890")
     assert info_hash == "abcdef1234567890abcdef1234567890abcdef12"
@@ -60,11 +57,20 @@ def test_get_magnet_from_uri_preserves_torrent_url_for_playback():
         "lib.utils.debrid.debrid_utils.extract_torrent_metadata",
         return_value="magnet:?xt=urn:btih:AAAABBBBCCCCDDDDEEEEFFFF0000111122223333&dn=Test",
     ):
-        magnet, info_hash, torrent_url = get_magnet_from_uri(
-            "https://jackett.local/dl/test"
-        )
+        magnet, info_hash, torrent_url = get_magnet_from_uri("https://jackett.local/dl/test")
 
     assert magnet.startswith("magnet:?xt=urn:btih:AAAABBBBCCCCDDDDEEEEFFFF")
     assert info_hash == "aaaabbbbccccddddeeeeffff0000111122223333"
     assert torrent_url == "https://jackett.local/dl/test"
     mock_get.assert_called_once()
+
+
+def test_get_source_status_uses_compact_labels_for_pack_sources():
+    assert get_source_status(TorrentStream(isPack=True, isCached=True)) == "[B]Cached[/B]"
+    assert get_source_status(TorrentStream(isPack=True)) == "[B]Download[/B]"
+
+
+def test_get_source_status_preserves_added_to_debrid_label_for_pack_sources():
+    source = TorrentStream(isPack=True, addedToDebrid=True, debridType="RealDebrid")
+
+    assert get_source_status(source) == "[B]RealDebrid Added[/B]"

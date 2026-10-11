@@ -2,6 +2,8 @@ import importlib
 import sys
 from unittest.mock import patch
 
+import pytest
+
 
 def _load_router_module():
     if "lib.router" in sys.modules:
@@ -13,6 +15,8 @@ def test_get_route_handler_returns_debrid_dispatcher():
     router = _load_router_module()
 
     assert router._get_route_handler("rd_auth") is router._route_debrid
+    assert router._get_route_handler("get_oc_downloads") is router._route_debrid
+    assert router._get_route_handler("offcloud_info") is router._route_debrid
 
 
 def test_get_route_handler_returns_cache_dispatcher():
@@ -25,6 +29,16 @@ def test_get_route_handler_returns_download_dispatcher_for_handle_download_file(
     router = _load_router_module()
 
     assert router._get_route_handler("handle_download_file") is router._route_downloads
+
+
+@pytest.mark.parametrize(
+    "action",
+    ["rename_stremio_addon", "rename_stremio_catalog"],
+)
+def test_get_route_handler_returns_stremio_dispatcher_for_rename_actions(action):
+    router = _load_router_module()
+
+    assert router._get_route_handler(action) is router._route_stremio
 
 
 def test_get_route_handler_falls_back_to_core_dispatcher():
@@ -50,9 +64,7 @@ def test_addon_router_uses_grouped_dispatcher():
         "lib.router._route_debrid"
     ) as route_debrid, patch(
         "lib.router._get_route_handler", return_value=route_debrid
-    ) as get_route_handler, patch(
-        "lib.utils.tmdb_init.ensure_tmdb_init"
-    ):
+    ) as get_route_handler, patch("lib.utils.tmdb_init.ensure_tmdb_init"):
         router.addon_router()
 
     get_route_handler.assert_called_once_with("rd_auth")
@@ -78,6 +90,116 @@ def test_route_trakt_dispatches_trakt_group_menu_action():
         router._route_trakt("trakt_group_menu", params)
 
     trakt_group_menu.assert_called_once_with(params)
+
+
+def test_route_trakt_dispatches_resume_action():
+    router = _load_router_module()
+
+    params = {"trakt_playback_id": "9"}
+    with patch("lib.navigation.trakt_resume") as trakt_resume:
+        router._route_trakt("trakt_resume", params)
+
+    trakt_resume.assert_called_once_with(params)
+
+
+def test_route_simkl_dispatches_auth_action():
+    router = _load_router_module()
+
+    with patch("lib.navigation.simkl_auth") as simkl_auth:
+        router._route_simkl("simkl_auth", {})
+
+    simkl_auth.assert_called_once_with({})
+
+
+def test_route_nuvio_dispatches_auth_action():
+    router = _load_router_module()
+
+    with patch("lib.navigation.nuvio_auth") as nuvio_auth:
+        router._route_nuvio("nuvio_auth", {})
+
+    nuvio_auth.assert_called_once_with({})
+
+
+def test_route_nuvio_dispatches_addon_selection_action():
+    router = _load_router_module()
+
+    with patch("lib.navigation.nuvio_toggle_addons") as nuvio_toggle_addons:
+        router._route_nuvio("nuvio_toggle_addons", {})
+
+    nuvio_toggle_addons.assert_called_once_with({})
+
+
+def test_route_nuvio_dispatches_menu_action():
+    router = _load_router_module()
+
+    with patch("lib.navigation.nuvio_menu") as nuvio_menu:
+        router._route_nuvio("nuvio_menu", {})
+
+    nuvio_menu.assert_called_once_with({})
+
+
+def test_route_nuvio_dispatches_resume_action():
+    """A history/continue-watching row dispatches through the real router."""
+    router = _load_router_module()
+
+    params = {"mode": "tv", "ids": '{"tmdb_id": "125988"}'}
+    with patch("lib.navigation.nuvio_resume") as nuvio_resume:
+        router._route_nuvio("nuvio_resume", params)
+
+    nuvio_resume.assert_called_once_with(params)
+    assert router._is_nuvio_action("nuvio_resume") is True
+    assert router._get_route_handler("nuvio_resume") is router._route_nuvio
+
+
+def test_route_simkl_dispatches_resume_action():
+    router = _load_router_module()
+
+    with patch("lib.navigation.simkl_resume") as simkl_resume:
+        router._route_simkl("simkl_resume", {"simkl_session_id": "9"})
+
+    simkl_resume.assert_called_once_with({"simkl_session_id": "9"})
+
+
+def test_route_simkl_dispatches_library_action():
+    router = _load_router_module()
+
+    params = {"media_type": "movies"}
+    with patch("lib.navigation.simkl_library_statuses") as simkl_library_statuses:
+        router._route_simkl("simkl_library_statuses", params)
+
+    simkl_library_statuses.assert_called_once_with(params)
+
+
+def test_route_simkl_dispatches_history_update_action():
+    router = _load_router_module()
+
+    params = {"operation": "add", "media_type": "movie", "tmdb_id": "42"}
+    with patch("lib.navigation.simkl_update_history") as simkl_update_history:
+        router._route_simkl("simkl_update_history", params)
+
+    simkl_update_history.assert_called_once_with(params)
+
+
+def test_get_route_handler_returns_simkl_dispatcher():
+    router = _load_router_module()
+
+    assert router._get_route_handler("simkl_auth") is router._route_simkl
+    assert router._get_route_handler("simkl_logout") is router._route_simkl
+    assert router._get_route_handler("simkl_continue_watching") is router._route_simkl
+    assert router._get_route_handler("simkl_discard_playback") is router._route_simkl
+    assert router._get_route_handler("simkl_library") is router._route_simkl
+    assert router._get_route_handler("simkl_move_to_status") is router._route_simkl
+    assert router._get_route_handler("simkl_update_history") is router._route_simkl
+
+
+def test_get_route_handler_returns_nuvio_dispatcher():
+    router = _load_router_module()
+
+    assert router._get_route_handler("nuvio_auth") is router._route_nuvio
+    assert router._get_route_handler("nuvio_logout") is router._route_nuvio
+    assert router._get_route_handler("nuvio_toggle_addons") is router._route_nuvio
+    assert router._get_route_handler("nuvio_menu") is router._route_nuvio
+    assert router._is_nuvio_action("nuvio_menu") is True
 
 
 def test_route_downloads_dispatches_handle_download_file():
@@ -109,9 +231,7 @@ def test_route_torrserver_download_torrent_subtitles():
     router = _load_router_module()
 
     params = {"hash": "abc123", "meta": "{}"}
-    with patch(
-        "lib.utils.torrent.torrserver_utils.download_torrent_subtitles"
-    ) as mock_dl:
+    with patch("lib.utils.torrent.torrserver_utils.download_torrent_subtitles") as mock_dl:
         router._route_torrserver("download_torrent_subtitles", params)
 
     mock_dl.assert_called_once_with(params)
@@ -121,9 +241,30 @@ def test_route_torrserver_download_and_play_subtitles():
     router = _load_router_module()
 
     params = {"hash": "abc123", "file_id": "1", "path": "movie.mkv", "meta": "{}"}
-    with patch(
-        "lib.utils.torrent.torrserver_utils.download_and_play_subtitles"
-    ) as mock_dl:
+    with patch("lib.utils.torrent.torrserver_utils.download_and_play_subtitles") as mock_dl:
         router._route_torrserver("download_and_play_subtitles", params)
 
     mock_dl.assert_called_once_with(params)
+
+
+@pytest.mark.parametrize(
+    "action", ["nuvio_add_to_library", "nuvio_remove_from_library", "nuvio_update_history"]
+)
+def test_get_route_handler_returns_nuvio_dispatcher_for_write_actions(action):
+    router = _load_router_module()
+
+    assert router._is_nuvio_action(action) is True
+    assert router._get_route_handler(action) is router._route_nuvio
+
+
+@pytest.mark.parametrize(
+    "action", ["nuvio_add_to_library", "nuvio_remove_from_library", "nuvio_update_history"]
+)
+def test_route_nuvio_dispatches_write_actions(action):
+    router = _load_router_module()
+
+    params = {"content_id": "tmdb:550", "content_type": "movie"}
+    with patch(f"lib.navigation.{action}") as handler:
+        router._route_nuvio(action, params)
+
+    handler.assert_called_once_with(params)

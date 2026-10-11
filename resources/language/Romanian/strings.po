@@ -267,6 +267,26 @@ msgctxt "#30257"
 msgid "Do you want to install Jacktook Burst?"
 msgstr "Vrei să instalezi Jacktook Burst?"
 
+msgctxt "#30258"
+msgid "Invalid host for %s. Use http:// or https://"
+msgstr "Host invalid pentru %s. Folosește http:// sau https://"
+
+msgctxt "#30259"
+msgid "Test connection"
+msgstr "Testează conexiunea"
+
+msgctxt "#30260"
+msgid "Jackgram: OK"
+msgstr "Jackgram: OK"
+
+msgctxt "#30261"
+msgid "Host not reachable"
+msgstr "Nu se poate conecta la gazdă"
+
+msgctxt "#30262"
+msgid "Search in Telegram"
+msgstr "Caută pe Telegram"
+
 msgctxt "#30650"
 msgid "Queued"
 msgstr "În așteptare"
@@ -431,6 +451,58 @@ msgctxt "#30939"
 msgid "Auto-resume from last position without asking"
 msgstr "Reia automat de la ultima poziție fără confirmare"
 
+msgctxt "#30940"
+msgid "Use Percentage Trigger"
+msgstr "Folosește declanșare procentuală"
+
+msgctxt "#30941"
+msgid "Show Dialog at Playback Percentage"
+msgstr "Afișează dialogul la procentul de redare"
+
+msgctxt "#30942"
+msgid "Trigger the next-episode dialog based on percentage of video played instead of seconds remaining."
+msgstr "Declanșează dialogul episodului următor pe baza procentului redat din video, în locul secundelor rămase."
+
+msgctxt "#30943"
+msgid "The percentage at which the next-episode dialog appears (e.g. 95 means 95% of the video)."
+msgstr "Procentul la care apare dialogul episodului următor (de ex. 95 înseamnă 95% din video)."
+
+msgctxt "#30944"
+msgid "Auto-Play Timeout"
+msgstr "Timeout redare automată"
+
+msgctxt "#30945"
+msgid "Seconds before auto-playing next episode. 0 = disabled, dialog waits for user input."
+msgstr "Secunde înainte de redarea automată a episodului următor. 0 = dezactivat, dialogul așteaptă intervenția utilizatorului."
+
+
+msgctxt "#30946"
+msgid "Offcloud Configuration"
+msgstr "Configurare Offcloud"
+
+msgctxt "#30947"
+msgid "Enable Offcloud cached torrent and cloud transfer support."
+msgstr "Activează suportul pentru torrente cache și transferuri în cloud Offcloud."
+
+msgctxt "#30948"
+msgid "Your Offcloud account username/email."
+msgstr "Numele de utilizator sau emailul tău Offcloud."
+
+msgctxt "#30949"
+msgid "Offcloud API key from Account API Key settings."
+msgstr "Cheia API Offcloud din setările Contului → Cheie API."
+
+msgctxt "#30950"
+msgid "View Offcloud account information."
+msgstr "Vezi informațiile contului Offcloud."
+
+msgctxt "#30951"
+msgid "Authorize add-on to access Offcloud account."
+msgstr "Autorizează addon-ul să acceseze contul Offcloud."
+
+msgctxt "#30952"
+msgid "Revoke Offcloud account access."
+msgstr "Revocă accesul contului Offcloud."
 msgctxt "#30728"
 msgid "Seeds"
 msgstr "Seederi"
@@ -458,6 +530,10 @@ msgstr "Configurează Torrentio"
 msgctxt "#30734"
 msgid "Enable"
 msgstr "Activează"
+
+msgctxt "#30735"
+msgid "Still Watching? Threshold"
+msgstr "Prag Încă vizionezi?"
 
 msgctxt "#30736"
 msgid "Subtitle Language"
@@ -606,6 +682,10 @@ msgstr "Configurează Zilean"
 msgctxt "#30772"
 msgid "Zilean Host"
 msgstr "Host Zilean"
+
+msgctxt "#30773"
+msgid "Number of consecutive auto-played episodes before asking 'Still Watching?'. Set to 0 to disable."
+msgstr "Numărul de episoade redate automat consecutiv înainte de întrebarea 'Încă vizionezi?'. Setează la 0 pentru dezactivare."
 
 msgctxt "#30774"
 msgid "Zilean Timeout"
@@ -1557,8 +1637,8 @@ msgstr "Calendar TV"
 
 
 msgctxt "#90022"
-msgid "If you enjoy using Jacktook and want to support its development, you can buy me a coffee! Your support helps keep the project active and enables future improvements:"
-msgstr "Dacă îți place să folosești Jacktook și vrei să susții dezvoltarea lui, îmi poți cumpăra o cafea! Sprijinul tău ajută la menținerea proiectului activ și permite îmbunătățiri viitoare:"
+msgid "Jacktook is free and built with care in spare time. If you enjoy the addon, consider supporting its development. Donations are optional and help keep updates coming."
+msgstr "Jacktook este gratuit și construit cu grijă în timpul liber. Dacă îți place addonul, ia în considerare susținerea dezvoltării. Donațiile sunt opționale și ajută la menținerea actualizărilor."
 
 msgctxt "#90023"
 msgid "Support Jacktook"
@@ -2106,6 +2186,10 @@ msgstr "Filtrează după sursă"
 msgctxt "#32303"
 msgid "Filter by Language"
 msgstr "Filtrează după limbă"
+
+msgctxt "#32307"
+msgid "Filter by Group"
+msgstr "Filtrează după grupul de lansare"
 
 msgctxt "#32304"
 msgid "Filter by Torrents"
@@ -4152,36 +4236,36 @@ msgid "Get your API key at ratingposterdb.com"
 msgstr "Obține cheia API de la ratingposterdb.com"
 
 msgctxt "#90765"
-msgid "Codec Filters"
-msgstr "Filtre codec"
+msgid "Filter by Codecs"
+msgstr "Filtrare după codecuri"
 
 msgctxt "#90766"
-msgid "HDR Filters"
-msgstr "Filtre HDR"
+msgid "Filter by HDR"
+msgstr "Filtrare după HDR"
 
 msgctxt "#90767"
-msgid "HEVC / H.265"
-msgstr "HEVC / H.265"
+msgid "Include HEVC / H.265"
+msgstr "Include HEVC / H.265"
 
 msgctxt "#90768"
-msgid "AV1"
-msgstr "AV1"
+msgid "Include AV1"
+msgstr "Include AV1"
 
 msgctxt "#90769"
-msgid "H.264"
-msgstr "H.264"
+msgid "Include H.264"
+msgstr "Include H.264"
 
 msgctxt "#90770"
-msgid "Dolby Vision"
-msgstr "Dolby Vision"
+msgid "Include Dolby Vision"
+msgstr "Include Dolby Vision"
 
 msgctxt "#90771"
-msgid "HDR10 / HDR10+"
-msgstr "HDR10 / HDR10+"
+msgid "Include HDR10 / HDR10+"
+msgstr "Include HDR10 / HDR10+"
 
 msgctxt "#90772"
-msgid "HDR (generic)"
-msgstr "HDR (generic)"
+msgid "Include HDR (generic)"
+msgstr "Include HDR (generic)"
 
 msgctxt "#90774"
 msgid "Organize downloads by type"
@@ -4346,3 +4430,326 @@ msgstr "Selectează limbile de exclus"
 msgctxt "#90814"
 msgid "Choose original languages to hide from TMDB listings"
 msgstr "Alege limbile originale de ascuns din listele TMDB"
+
+msgctxt "#90815"
+msgid "Support Jacktook"
+msgstr "Susține Jacktook"
+
+msgctxt "#90816"
+msgid "Support Jacktook development with an optional Ko-fi donation."
+msgstr "Susține dezvoltarea Jacktook cu o donație opțională pe Ko-fi."
+
+msgctxt "#90817"
+msgid "Scan the QR code or open this link:"
+msgstr "Scanează codul QR sau deschide acest link:"
+
+msgctxt "#90818"
+msgid "Jacktook was updated with new improvements. Donations are optional, but they help keep development active. Would you like to see the support link?"
+msgstr "Jacktook a fost actualizat cu îmbunătățiri noi. Donațiile sunt opționale, dar ajută la menținerea dezvoltării active. Vrei să vezi linkul de susținere?"
+
+msgctxt "#90819"
+msgid "Rename Stremio add-on"
+msgstr "Redenumește addonul Stremio"
+
+msgctxt "#90824"
+msgid "Rename Stremio catalog"
+msgstr "Redenumește catalogul Stremio"
+
+msgctxt "#90827"
+msgid "Set a Kodi-only display alias for a Stremio add-on."
+msgstr "Setează un alias de afișare doar în Kodi pentru un addon Stremio."
+
+msgctxt "#90828"
+msgid "Set a Kodi-only display alias for a Stremio catalog."
+msgstr "Setează un alias de afișare doar în Kodi pentru un catalog Stremio."
+
+msgctxt "#90832"
+msgid "Stremio: Addons Management"
+msgstr "Stremio: Gestionarea addonurilor"
+
+msgctxt "#90833"
+msgid "Stremio: Catalogs & Visibility"
+msgstr "Stremio: Cataloage și vizibilitate"
+
+msgctxt "#90834"
+msgid "Stremio: Rename & Customization"
+msgstr "Stremio: Redenumire și personalizare"
+
+msgctxt "#90835"
+msgid "Stremio: Search & Behavior"
+msgstr "Stremio: Căutare și comportament"
+
+msgctxt "#90300"
+msgid "External Scraper"
+msgstr "Magneto"
+
+msgctxt "#90301"
+msgid "Enable external scraper module integration."
+msgstr "Enable external scraper module integration."
+
+msgctxt "#90302"
+msgid "Choose External Scraper Module"
+msgstr "Alege modulul scraper extern"
+
+msgctxt "#90303"
+msgid "Select an external scraper addon module to use for torrent search."
+msgstr "Selectează un modul addon scraper extern de folosit pentru căutarea de torrente."
+
+msgctxt "#90304"
+msgid "Choose External Scraper"
+msgstr "Alege scraper extern"
+
+msgctxt "#90305"
+msgid "Selected Module"
+msgstr "Modul selectat"
+
+msgctxt "#90306"
+msgid "Open External Scraper Settings"
+msgstr "Deschide setările scraperului extern"
+
+msgctxt "#90307"
+msgid "Open the settings for the selected external scraper module."
+msgstr "Deschide setările pentru modulul scraper extern selectat."
+msgctxt "#30956"
+msgid "Use integrated OpenSubtitles"
+msgstr ""
+
+msgctxt "#30957"
+msgid "Queries the integrated OpenSubtitles service with the current video ID and, when available, filename, size, and video hash. Disable this to prevent those requests."
+msgstr ""
+
+msgctxt "#90962"
+msgid "MDbList"
+msgstr "MDbList"
+
+msgctxt "#90964"
+msgid "The installed version is newer than the version published in the repository."
+msgstr "Versiunea instalată este mai nouă decât versiunea publicată în depozit."
+
+msgctxt "#90999"
+msgid "Clear Continue Watching"
+msgstr "Golește continuarea vizionării"
+
+msgctxt "#91001"
+msgid "Continue Watching cleared"
+msgstr "Continuarea vizionării a fost ștearsă"
+
+msgctxt "#91002"
+msgid "Nuvio: Account"
+msgstr "Nuvio: Cont"
+
+msgctxt "#91003"
+msgid "Enable"
+msgstr "Activează"
+
+msgctxt "#91005"
+msgid "Connect Nuvio with QR Code"
+msgstr "Conectează Nuvio cu cod QR"
+
+msgctxt "#91004"
+msgid "Push your Jacktook movie and TV episode watch progress to Nuvio when playback stops."
+msgstr "Trimite progresul de vizionare pentru filmele și episoadele TV din Jacktook către Nuvio când redarea se oprește."
+
+msgctxt "#91006"
+msgid "Scan the QR code with a signed-in Nuvio device, then select the profile that receives watch-progress updates."
+msgstr "Scanează codul QR cu un dispozitiv conectat la Nuvio, apoi selectează profilul care primește actualizările progresului de vizionare."
+
+msgctxt "#91007"
+msgid "Sign Out of Nuvio"
+msgstr "Deconectare din Nuvio"
+
+msgctxt "#91008"
+msgid "Remove the saved Nuvio session and selected profile from Jacktook."
+msgstr "Elimină din Jacktook sesiunea Nuvio salvată și profilul selectat."
+
+msgctxt "#91009"
+msgid "Nuvio connection cancelled."
+msgstr "Conexiunea la Nuvio a fost anulată."
+
+msgctxt "#91010"
+msgid "Nuvio authorization expired. Start the QR connection again."
+msgstr "Autorizarea Nuvio a expirat. Pornește din nou conexiunea QR."
+
+msgctxt "#91011"
+msgid "Nuvio authorization was already used or cancelled. Start the QR connection again."
+msgstr "Autorizarea Nuvio a fost deja utilizată sau anulată. Pornește din nou conexiunea QR."
+
+msgctxt "#91012"
+msgid "Nuvio could not start QR authorization. Please try again."
+msgstr "Nuvio nu a putut porni autorizarea QR. Încearcă din nou."
+
+msgctxt "#91013"
+msgid "Nuvio authorization check failed. Please try again."
+msgstr "Verificarea autorizării Nuvio a eșuat. Încearcă din nou."
+
+msgctxt "#91014"
+msgid "Nuvio authorization exchange failed. Please try again."
+msgstr "Schimbul de autorizare Nuvio a eșuat. Încearcă din nou."
+
+msgctxt "#91015"
+msgid "Unable to load Nuvio profiles. Please try again."
+msgstr "Profilurile Nuvio nu au putut fi încărcate. Încearcă din nou."
+
+msgctxt "#91016"
+msgid "Nuvio watch-progress sync connected."
+msgstr "Sincronizarea progresului de vizionare Nuvio este conectată."
+
+msgctxt "#91017"
+msgid "Choose Nuvio profile"
+msgstr "Alege profilul Nuvio"
+
+msgctxt "#91018"
+msgid "Nuvio: Addons Management"
+msgstr "Nuvio: Gestionarea addonurilor"
+
+msgctxt "#91019"
+msgid "Select Nuvio Addons"
+msgstr "Selectați suplimentele Nuvio"
+
+msgctxt "#91020"
+msgid "Select the enabled Nuvio addons to use for stream searches."
+msgstr "Selectați suplimentele Nuvio activate pentru a le utiliza la căutările de fluxuri."
+
+msgctxt "#91021"
+msgid "No usable Nuvio addons are available."
+msgstr "Nu sunt disponibile suplimente Nuvio utilizabile."
+
+msgctxt "#91022"
+msgid "Nuvio addons could not be loaded. Your saved selection was not changed."
+msgstr "Suplimentele Nuvio nu au putut fi încărcate. Selecția salvată nu a fost modificată."
+
+msgctxt "#91023"
+msgid "Nuvio: Watch Progress"
+msgstr "Nuvio: Progresul vizionării"
+
+msgctxt "#91024"
+msgid "Nuvio: Watch History"
+msgstr "Nuvio: Istoricul vizionării"
+
+msgctxt "#91025"
+msgid "No Nuvio watch progress available."
+msgstr "Nu este disponibil progresul de vizionare Nuvio."
+
+msgctxt "#91026"
+msgid "No Nuvio watch history available."
+msgstr "Nu este disponibil istoricul de vizionare Nuvio."
+
+msgctxt "#91027"
+msgid "Remove from Nuvio"
+msgstr "Elimină din Nuvio"
+
+msgctxt "#91028"
+msgid "Removed from Nuvio Continue Watching"
+msgstr "Eliminat din Nuvio Continuă vizionarea"
+
+msgctxt "#91029"
+msgid "Could not remove Nuvio watch progress."
+msgstr "Progresul de vizionare Nuvio nu a putut fi eliminat."
+
+msgctxt "#91030"
+msgid "Despre"
+msgstr "Despre"
+
+msgctxt "#91031"
+msgid "Version"
+msgstr "Versiune"
+
+msgctxt "#91032"
+msgid "My Nuvio Movies"
+msgstr "Filmele mele Nuvio"
+
+msgctxt "#91033"
+msgid "My Nuvio Shows"
+msgstr "Serialele mele Nuvio"
+
+msgctxt "#91034"
+msgid "No Nuvio library items available."
+msgstr "Nu sunt disponibile elemente din biblioteca Nuvio."
+
+msgctxt "#91035"
+msgid "Nuvio: Library Sync"
+msgstr "Nuvio: Sincronizarea bibliotecii"
+
+msgctxt "#91036"
+msgid "Sync interval (minutes)"
+msgstr "Interval de sincronizare (minute)"
+
+msgctxt "#91037"
+msgid "How often Nuvio library changes are pulled, in minutes (minimum 1)."
+msgstr "Cât de des sunt preluate modificările bibliotecii Nuvio, în minute (minimum 1)."
+
+msgctxt "#91038"
+msgid "Nuvio"
+msgstr "Nuvio"
+
+msgctxt "#91039"
+msgid "Add to Nuvio Library"
+msgstr "Adaugă în biblioteca Nuvio"
+
+msgctxt "#91040"
+msgid "Remove from Nuvio Library"
+msgstr "Elimină din biblioteca Nuvio"
+
+msgctxt "#91041"
+msgid "Added to Nuvio Library"
+msgstr "Adăugat în biblioteca Nuvio"
+
+msgctxt "#91042"
+msgid "Removed from Nuvio Library"
+msgstr "Eliminat din biblioteca Nuvio"
+
+msgctxt "#91043"
+msgid "Could not update the Nuvio library."
+msgstr "Biblioteca Nuvio nu a putut fi actualizată."
+
+msgctxt "#91044"
+msgid "Mark as Watched on Nuvio"
+msgstr "Marchează ca vizionat pe Nuvio"
+
+msgctxt "#91045"
+msgid "Mark as Unwatched on Nuvio"
+msgstr "Marchează ca nevizionat pe Nuvio"
+
+msgctxt "#91046"
+msgid "Marked as watched on Nuvio."
+msgstr "Marcat ca vizionat pe Nuvio."
+
+msgctxt "#91047"
+msgid "Removed from Nuvio history."
+msgstr "Eliminat din istoricul Nuvio."
+
+msgctxt "#91048"
+msgid "Could not update Nuvio history."
+msgstr "Istoricul Nuvio nu a putut fi actualizat."
+
+msgctxt "#91049"
+msgid "Remove from Nuvio History?"
+msgstr "Elimini din istoricul Nuvio?"
+
+msgctxt "#91050"
+msgid "This removes the item from your Nuvio watch history. Continue?"
+msgstr "Aceasta elimină elementul din istoricul tău de vizionare Nuvio. Continui?"
+
+msgctxt "#91051"
+msgid "Colecții"
+msgstr "Colecții"
+
+msgctxt "#91052"
+msgid "Nu există colecții Nuvio disponibile."
+msgstr "Nu există colecții Nuvio disponibile."
+
+msgctxt "#91053"
+msgid "Supliment neinstalat"
+msgstr "Supliment neinstalat"
+
+msgctxt "#91054"
+msgid "Suplimentul acestui catalog nu este instalat în Nuvio."
+msgstr "Suplimentul acestui catalog nu este instalat în Nuvio."
+
+msgctxt "#91055"
+msgid "Această sursă de colecție nu este încă acceptată."
+msgstr "Această sursă de colecție nu este încă acceptată."
+
+msgctxt "#91056"
+msgid "Nu s-au găsit rezultate."
+msgstr "Nu s-au găsit rezultate."

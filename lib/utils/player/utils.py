@@ -1,17 +1,21 @@
+import re
+import unicodedata
 from datetime import timedelta
-from typing import Any, Dict, Optional
-from urllib.parse import quote
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, quote, urlparse
 
 from xbmc import LOGDEBUG
 from xbmcgui import Dialog
 
 from lib.db.cached import cache
+from lib.domain.torrent import TorrentStream
 from lib.jacktook.utils import kodilog
 from lib.utils.debrid.debrid_utils import (
     get_debrid_direct_url,
     get_debrid_pack_direct_url,
     is_supported_debrid_type,
 )
+from lib.utils.debrid.debrid_utils import _is_torrent_ready_in_debrid
 from lib.utils.general.utils import (
     DebridType,
     Indexer,
@@ -20,20 +24,67 @@ from lib.utils.general.utils import (
     torrent_clients,
 )
 from lib.utils.kodi.logging import summarize_locator_for_log
+from lib.utils.parsers.pack_parser import (
+    pack_scope_allows_transition,
+    playback_pack_scope,
+)
 from lib.utils.kodi.utils import (
     execute_builtin,
     get_setting,
     is_elementum_addon,
-    is_jacktorr_addon,
+    is_jacktorr_addon_enabled,
     is_torrest_addon,
     notification,
     translation,
 )
 
+_ELEMENTUM_MOVIE_FILE_SEPARATOR = r"[\s._'’\-]+"
+_ELEMENTUM_MOVIE_ACCENT_CLASSES = {
+    "a": r"[aàáâäãå]",
+    "c": r"[cç]",
+    "e": r"[eèéêë]",
+    "i": r"[iìíîï]",
+    "n": r"[nñ]",
+    "o": r"[oòóôöõ]",
+    "u": r"[uùúûü]",
+    "y": r"[yýÿ]",
+}
+
+
+def _build_elementum_movie_file_match(title: Any) -> str:
+    """Build a conservative filename regex for Elementum movie torrents.
+
+    Elementum selects the first playable file matching ``file_match`` and falls
+    back to its normal file picker when no file matches. Keep this deliberately
+    strict so collection/trilogy torrents never auto-select from a vague title.
+    """
+    if not isinstance(title, str):
+        return ""
+
+    normalized = title.casefold().replace("œ", "oe").replace("æ", "ae")
+    normalized = unicodedata.normalize("NFKD", normalized)
+    normalized = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    tokens = re.findall(r"[a-z0-9]+", normalized)
+
+    # One-word/very short titles are too ambiguous for a first-match strategy.
+    if len(tokens) < 2 or not any(len(token) >= 4 for token in tokens):
+        return ""
+
+    def token_pattern(token: str) -> str:
+        return "".join(
+            _ELEMENTUM_MOVIE_ACCENT_CLASSES.get(char, char) for char in token
+        )
+
+    return _ELEMENTUM_MOVIE_FILE_SEPARATOR.join(
+        token_pattern(token) for token in tokens
+    )
+
 
 def resolve_playback_url(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     indexer_type: str = data.get("type", "")
-    debrid_type: str = data.get("debrid_type", "")
+    debrid_type: Any = data.get("debrid_type", "")
     is_pack: bool = data.get("is_pack", False)
 
     if indexer_type in [IndexerType.DIRECT, IndexerType.STREMIO_DEBRID]:
@@ -43,11 +94,30 @@ def resolve_playback_url(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 data["url"] = resolved_url
                 return data
             return None
-        elif data.get("indexer") in [Indexer.JACKGRAM, Indexer.TELEGRAM]:
-            token = get_setting("jackgram_token", "")
-            url = data.get("url", "")
-            if token and "|Authorization=Bearer" not in url:
-                data["url"] = f"{url}|Authorization=Bearer {token}"
+        else:
+            # Detect jackgram payload even when indexer is missing (e.g. navigation latest)
+            indexer_val = data.get("indexer")
+            name_val = data.get("name")
+            is_jackgram = indexer_val in [Indexer.JACKGRAM, Indexer.TELEGRAM] or name_val in [
+                Indexer.JACKGRAM,
+                Indexer.TELEGRAM,
+            ]
+            if not is_jackgram:
+                url_val = data.get("url", "")
+                if "/dl?" in url_val and data.get("type") == IndexerType.DIRECT:
+                    try:
+                        host = str(get_setting("jackgram_host") or "")
+                        if (host and host.rstrip("/") in url_val) or (
+                            get_setting("jackgram_token") and name_val == "Telegram"
+                        ):
+                            is_jackgram = True
+                    except Exception:
+                        pass
+            if is_jackgram:
+                token = get_setting("jackgram_token", "")
+                url = data.get("url", "")
+                if token and "|Authorization=Bearer" not in url:
+                    data["url"] = f"{url}|Authorization=Bearer {token}"
         return data
 
     if is_supported_debrid_type(debrid_type):
@@ -56,11 +126,42 @@ def resolve_playback_url(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return data
         return None
 
+    if not isinstance(debrid_type, str):
+        return None
+
     addon_url = get_torrent_url(data)
     if addon_url:
         data["url"] = addon_url
         return data
     return None
+
+
+def resolve_failure_reason(data: Dict[str, Any]) -> str:
+    """Best-effort reason for why resolve_playback_url() returned None.
+
+    Never mutates ``data`` and never raises: it is only used for logging.
+    """
+    indexer_type: str = data.get("type", "")
+    debrid_type: str = data.get("debrid_type", "")
+
+    if indexer_type in [IndexerType.DIRECT, IndexerType.STREMIO_DEBRID]:
+        if data.get("indexer") == Indexer.EASYNEWS:
+            return "easynews_url_unresolved"
+        if data.get("url"):
+            return "none"
+        return "missing_url"
+
+    if is_supported_debrid_type(debrid_type):
+        info_hash = data.get("info_hash", "")
+        if not info_hash:
+            return "debrid_missing_info_hash"
+        if not _is_torrent_ready_in_debrid(debrid_type, info_hash):
+            return "debrid_torrent_not_ready"
+        return "debrid_link_unresolved"
+
+    if data.get("is_torrent") or data.get("magnet") or data.get("info_hash"):
+        return "torrent_client_unresolved"
+    return "missing_url"
 
 
 def get_easynews_url(data: Dict[str, Any]) -> Optional[str]:
@@ -77,7 +178,7 @@ def get_easynews_url(data: Dict[str, Any]) -> Optional[str]:
         return None
 
 
-def get_torrent_url(data: Dict[str, Any]) -> Optional[str]:
+def get_torrent_url(data: Dict[str, Any], client: str = "") -> Optional[str]:
     magnet: str = data.get("magnet", "")
     url: str = data.get("url", "")
     mode: str = data.get("mode", "")
@@ -89,16 +190,8 @@ def get_torrent_url(data: Dict[str, Any]) -> Optional[str]:
 
         magnet = info_hash_to_magnet(info_hash)
 
-    kodilog(
-        "Torrent playback resolution: indexer={!r}, client={!r}, magnet={!r}, url={!r}, infohash={!r}, is_torrent={}".format(
-            data.get("indexer", ""),
-            str(get_setting("torrent_client")),
-            summarize_locator_for_log(magnet),
-            summarize_locator_for_log(url),
-            str(info_hash).lower()[:12],
-            data.get("is_torrent", False),
-        )
-    )
+    if client:
+        return get_torrent_url_for_client(magnet, url, mode, ids, client, data=data)
 
     if get_setting("torrent_enable"):
         return get_torrent_url_for_client(magnet, url, mode, ids, data=data)
@@ -113,22 +206,28 @@ def get_torrent_url(data: Dict[str, Any]) -> Optional[str]:
 
 
 def get_torrent_url_for_client(
-    magnet: str, url: str, mode: str, ids: Any, client: str = "", data: Optional[Dict[str, Any]] = None
+    magnet: str,
+    url: str,
+    mode: str,
+    ids: Any,
+    client: str = "",
+    data: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     torrent_client = client or str(get_setting("torrent_client"))
     if torrent_client in [Players.TORREST]:
         return get_torrest_url(magnet, url)
     elif torrent_client in [Players.ELEMENTUM]:
-        return get_elementum_url(magnet, url, mode, ids)
+        return get_elementum_url(magnet, url, mode, ids, data=data)
     elif torrent_client in [Players.JACKTORR]:
-        return get_jacktorr_url(magnet, url, data=data)
+        jacktorr_data = dict(data or {})
+        jacktorr_data.pop("file_idx", None)
+        jacktorr_data.pop("fileIdx", None)
+        return get_jacktorr_url(magnet, url, data=jacktorr_data)
     else:
         raise TorrentException(f"Unknown torrent client selected: {torrent_client}")
 
 
-def get_torrent_client_selection(
-    magnet: str, url: str, mode: str, ids: Any
-) -> Optional[str]:
+def get_torrent_client_selection(magnet: str, url: str, mode: str, ids: Any) -> Optional[str]:
     chosen_client = Dialog().select(translation(90341), torrent_clients)
     if chosen_client < 0:
         return None
@@ -138,13 +237,19 @@ def get_torrent_client_selection(
 def get_debrid_url(
     data: Dict[str, Any], debrid_type: str, is_pack: bool
 ) -> Optional[Dict[str, Any]]:
-    if is_pack and debrid_type in [DebridType.RD, DebridType.TB, DebridType.AD]:
+    if is_pack and debrid_type in [DebridType.RD, DebridType.TB, DebridType.OC, DebridType.AD]:
         return get_debrid_pack_direct_url(debrid_type, data)
     else:
         return get_debrid_direct_url(debrid_type, data)
 
 
-def get_elementum_url(magnet: str, url: str, mode: str, ids: Any) -> Optional[str]:
+def get_elementum_url(
+    magnet: str,
+    url: str,
+    mode: str,
+    ids: Any,
+    data: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     if not is_elementum_addon():
         if Dialog().yesno(
             translation(30252),
@@ -153,29 +258,132 @@ def get_elementum_url(magnet: str, url: str, mode: str, ids: Any) -> Optional[st
             nolabel=translation(90606),
         ):
             execute_builtin("InstallAddon(plugin.video.elementum)")
+            notification(translation(91058) % "Elementum")
         else:
             notification(translation(30252))
-            return None
+        return None
 
     tmdb_id = ids.get("tmdb_id", "") if isinstance(ids, dict) else ""
+    uri = url or magnet
 
-    if magnet or url:
-        return f"plugin://plugin.video.elementum/play?uri={quote(magnet or url)}&type={mode}&tmdb={tmdb_id}"
-    else:
+    if not uri:
         raise TorrentException("No magnet or url found for Elementum playback")
+
+    selection_params = ""
+    tv_data = (data or {}).get("tv_data")
+    if mode == "tv" and isinstance(tv_data, dict):
+        season = tv_data.get("season")
+        episode = tv_data.get("episode")
+        if all(
+            not isinstance(value, bool) and str(value).isdigit()
+            for value in (tmdb_id, season, episode)
+        ):
+            selection_params = (
+                f"&show={quote(str(tmdb_id))}"
+                f"&season={quote(str(season))}"
+                f"&episode={quote(str(episode))}"
+            )
+    elif mode in ("movie", "movies"):
+        file_match = _build_elementum_movie_file_match((data or {}).get("title"))
+        if file_match:
+            selection_params = f"&file_match={quote(file_match)}"
+
+    return (
+        f"plugin://plugin.video.elementum/play?uri={quote(uri)}"
+        f"&type={mode}&tmdb={tmdb_id}{selection_params}"
+    )
+
+
+def build_elementum_pack_next_playback(
+    data: Dict[str, Any], next_tv_data: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Build resolved PlayNext data when the selected Elementum pack covers it."""
+    if data.get("mode") != "tv" or not isinstance(next_tv_data, dict):
+        return None
+
+    ids = data.get("ids")
+    current_tv_data = data.get("tv_data")
+    if not isinstance(ids, dict) or not isinstance(current_tv_data, dict):
+        return None
+
+    tmdb_id = ids.get("tmdb_id")
+    current_season = current_tv_data.get("season")
+    next_season = next_tv_data.get("season")
+    next_episode = next_tv_data.get("episode")
+    values = (tmdb_id, current_season, next_season, next_episode)
+    if not all(not isinstance(value, bool) and str(value).isdigit() for value in values):
+        return None
+
+    pack_scope = playback_pack_scope(data, current_season=current_season)
+    if not pack_scope.get("is_pack"):
+        kodilog(
+            f"[PLAYNEXT] Elementum pack reuse rejected: "
+            f"type={pack_scope.get('pack_type')}, reason={pack_scope.get('pack_reason')}"
+        )
+        return None
+    if not pack_scope_allows_transition(pack_scope, current_season, next_season):
+        kodilog(
+            f"[PLAYNEXT] Elementum pack reuse rejected for season transition "
+            f"S{current_season}->S{next_season}: type={pack_scope.get('pack_type')}, "
+            f"seasons={pack_scope.get('pack_seasons')}"
+        )
+        return None
+
+    current_url = str(data.get("url") or "")
+    parsed = urlparse(current_url)
+    if (
+        parsed.scheme != "plugin"
+        or parsed.netloc != "plugin.video.elementum"
+        or parsed.path.rstrip("/") != "/play"
+    ):
+        return None
+
+    uri_values = parse_qs(parsed.query).get("uri") or []
+    uri = str(uri_values[0]) if uri_values else str(data.get("magnet") or "")
+    if not uri:
+        return None
+
+    next_data = dict(data)
+    next_data["tv_data"] = dict(next_tv_data)
+    next_data["playnext_context"] = True
+    next_data["is_pack"] = True
+    next_data["pack_type"] = pack_scope["pack_type"]
+    next_data["pack_seasons"] = pack_scope["pack_seasons"]
+    next_data["pack_reason"] = pack_scope["pack_reason"]
+    for key in (
+        "autoplay",
+        "current_time",
+        "direct_play",
+        "next_tv_data",
+        "progress",
+        "resume",
+        "subtitles_path",
+        "stream_subtitles",
+        "total_time",
+    ):
+        next_data.pop(key, None)
+
+    magnet = uri if uri.startswith("magnet:") else ""
+    torrent_url = "" if magnet else uri
+    next_url = get_elementum_url(
+        magnet,
+        torrent_url,
+        "tv",
+        ids,
+        data=next_data,
+    )
+    if not next_url:
+        return None
+    next_data["url"] = next_url
+    return next_data
 
 
 def get_jacktorr_url(magnet: str, url: str, data: Optional[Dict[str, Any]] = None) -> Optional[str]:
     kodilog(
-        "Preparing Jacktorr URL with magnet={!r}, url={!r}, has_magnet={}, has_url={}".format(
-            summarize_locator_for_log(magnet),
-            summarize_locator_for_log(url),
-            bool(magnet),
-            bool(url),
-        ),
+        f"Preparing Jacktorr URL with magnet={summarize_locator_for_log(magnet)!r}, url={summarize_locator_for_log(url)!r}, has_magnet={bool(magnet)}, has_url={bool(url)}",
         level=LOGDEBUG,
     )
-    if not is_jacktorr_addon():
+    if not is_jacktorr_addon_enabled():
         if Dialog().yesno(
             translation(30253),
             translation(30255),
@@ -183,25 +391,52 @@ def get_jacktorr_url(magnet: str, url: str, data: Optional[Dict[str, Any]] = Non
             nolabel=translation(90606),
         ):
             execute_builtin("InstallAddon(plugin.video.jacktorr)")
+            notification(translation(91058) % "Jacktorr")
         else:
             notification(translation(30253))
-            return None
+        return None
 
     _save_jacktorr_playback_metadata(magnet, data or {})
-
+    poster = (data or {}).get("poster") or ""
+    poster_param = f"&poster={quote(poster)}" if poster else ""
+    title = (data or {}).get("title") or ""
+    title_param = f"&title={quote(title)}" if title else ""
+    description = (data or {}).get("description") or ""
+    description_param = f"&description={quote(description)}" if description else ""
+    category = _get_jacktorr_category((data or {}).get("mode"))
+    category_param = f"&category={quote(category)}" if category else ""
+    tv_data = (data or {}).get("tv_data")
+    season_episode_param = ""
+    if isinstance(tv_data, dict):
+        season = tv_data.get("season")
+        episode = tv_data.get("episode")
+        if all(
+            not isinstance(value, bool) and str(value).isdigit()
+            for value in (season, episode)
+        ):
+            season_episode_param = f"&season={quote(str(season))}&episode={quote(str(episode))}"
     if magnet:
-        _url = f"plugin://plugin.video.jacktorr/play_magnet?magnet={quote(magnet)}"
+        _url = f"plugin://plugin.video.jacktorr/play_magnet?magnet={quote(magnet)}{poster_param}{title_param}{description_param}{category_param}{season_episode_param}"
     elif url:
-        _url = f"plugin://plugin.video.jacktorr/play_url?url={quote(url)}"
+        _url = f"plugin://plugin.video.jacktorr/play_url?url={quote(url)}{poster_param}{title_param}{description_param}{category_param}{season_episode_param}"
     else:
         kodilog("Jacktorr playback failed due to empty magnet and url", level=LOGDEBUG)
         raise TorrentException("No magnet or url found for Jacktorr playback")
     return _url
 
 
+def _get_jacktorr_category(mode: Any) -> Optional[str]:
+    if not isinstance(mode, str):
+        return None
+    category = mode.strip().lower()
+    if category == "movies":
+        return "movie"
+    return category if category in {"movie", "tv", "music", "other"} else None
+
+
 def _save_jacktorr_playback_metadata(magnet: str, data: Dict[str, Any]) -> None:
     ids = data.get("ids") if isinstance(data.get("ids"), dict) else {}
-    imdb_id = ids.get("imdb_id")
+    ids.get("imdb_id")
     mode = data.get("mode", "")
     tv_data = data.get("tv_data") or {}
     title = data.get("title", "")
@@ -249,9 +484,10 @@ def get_torrest_url(magnet: str, url: str) -> Optional[str]:
             nolabel=translation(90606),
         ):
             execute_builtin("InstallAddon(plugin.video.torrest)")
+            notification(translation(91058) % "Torrest")
         else:
             notification(translation(30250))
-            return None
+        return None
     if magnet:
         _url = f"plugin://plugin.video.torrest/play_magnet?magnet={quote(magnet)}"
     elif url:
@@ -262,9 +498,7 @@ def get_torrest_url(magnet: str, url: str) -> Optional[str]:
 
 
 class TorrentException(Exception):
-    def __init__(
-        self, message: str, status_code: Optional[int] = None, error_content: Any = None
-    ):
+    def __init__(self, message: str, status_code: Optional[int] = None, error_content: Any = None):
         self.message = message
         self.status_code = status_code
         self.error_content = error_content
@@ -282,16 +516,55 @@ def get_autoscrape_cache_key(id_value: Any, season: Any, episode: Any) -> str:
     return f"as:{id_value}_{season}_{episode}"
 
 
-def cache_autoscrape_result(key: str, data: Dict[str, Any], ttl_hours: Optional[int] = None) -> None:
+def get_autoscrape_results_cache_key(id_value: Any, season: Any, episode: Any) -> str:
+    """Build autoscrape results cache key using as_results:{id}_{season}_{episode} format."""
+    return f"as_results:{id_value}_{season}_{episode}"
+
+
+def cache_autoscrape_result(
+    key: str, data: Dict[str, Any], ttl_hours: Optional[int] = None
+) -> None:
     """Cache resolved playback data with a TTL (default from autoscrape_ttl setting)."""
     if ttl_hours is None:
         ttl_hours = int(get_setting("autoscrape_ttl", 4) or 4)
     cache.set(key, data, expires=timedelta(hours=ttl_hours))
 
 
-def autoscrape_next_episode(item_data: Dict[str, Any], next_tv_data: Dict[str, Any]) -> None:
-    """Background thread: search, select, resolve, and cache next episode."""
-    if not get_setting("autoscrape_next_episode", False):
+# Quality pattern -> label mapping, matching PreProcessBuilder.filter_by_quality().
+# Keep in priority order: more specific patterns first.
+_QUALITY_PATTERNS: List[Tuple[str, str]] = [
+    ("2160", "[B][COLOR yellow]4k[/COLOR][/B]"),
+    ("1080p", "[B][COLOR blue]1080p[/COLOR][/B]"),
+    ("720p", "[B][COLOR orange]720p[/COLOR][/B]"),
+    ("480p", "[B][COLOR orange]480p[/COLOR][/B]"),
+]
+_UNKNOWN_QUALITY_LABEL = "[B][COLOR yellow]N/A[/COLOR][/B]"
+
+
+def _extract_quality_from_titles(results: List[TorrentStream]) -> None:
+    """Mutate each result's quality field by matching patterns in the title."""
+    for res in results:
+        matched = False
+        for pattern, label in _QUALITY_PATTERNS:
+            if pattern in res.title:
+                res.quality = label
+                matched = True
+                break
+        if not matched:
+            res.quality = _UNKNOWN_QUALITY_LABEL
+
+
+def autoscrape_next_episode(
+    item_data: Dict[str, Any],
+    next_tv_data: Dict[str, Any],
+    force: bool = False,
+) -> None:
+    """Background thread: search and cache the next episode.
+
+    ``force`` is used after an explicit PlayNext click. It bypasses only the
+    proactive pre-scrape setting; it does not enable global autoplay.
+    """
+    if not force and not get_setting("autoscrape_next_episode", False):
         return
 
     ids = item_data.get("ids")
@@ -308,11 +581,12 @@ def autoscrape_next_episode(item_data: Dict[str, Any], next_tv_data: Dict[str, A
         return
 
     cache_key = get_autoscrape_cache_key(id_value, season, episode)
+    results_cache_key = get_autoscrape_results_cache_key(id_value, season, episode)
 
     try:
-        from lib.search import search_client
+        from lib.search import _process_search_results, search_client
 
-        results = search_client(
+        raw_results = search_client(
             query=item_data.get("title", ""),
             ids=ids,
             mode=item_data.get("mode", ""),
@@ -323,15 +597,42 @@ def autoscrape_next_episode(item_data: Dict[str, Any], next_tv_data: Dict[str, A
             show_dialog=False,
         )
 
-        if not results:
+        if not raw_results:
             kodilog("Autoscrape: no results found")
             return
 
+        if not get_setting("auto_play", False):
+            results = _process_search_results(
+                raw_results,
+                item_data.get("mode", ""),
+                next_tv_data.get("name", ""),
+                episode,
+                season,
+                "",
+                item_data.get("title", ""),
+                item_data.get("media_type", ""),
+                True,
+                suppress_debrid_dialog=True,
+                suppress_busy_dialog=force,
+            )
+            if not results:
+                kodilog("Autoscrape: no results after normal source processing")
+                return
+            cache_autoscrape_result(results_cache_key, results)
+            kodilog(
+                f"Autoscrape: cached processed results {results_cache_key} "
+                f"({len(results)} sources)"
+            )
+            return
+
+        results = raw_results
+        _extract_quality_from_titles(results)
+        cache_autoscrape_result(results_cache_key, results)
+        kodilog(f"Autoscrape: cached results {results_cache_key} ({len(results)} sources)")
+
         # Apply auto_play heuristics to select best source
         preferred_quality = str(get_setting("auto_play_quality", "1080p"))
-        quality_matches = [
-            r for r in results if preferred_quality.lower() in r.quality.lower()
-        ]
+        quality_matches = [r for r in results if preferred_quality.lower() in r.quality.lower()]
         if not quality_matches:
             quality_matches = results
 
@@ -348,6 +649,7 @@ def autoscrape_next_episode(item_data: Dict[str, Any], next_tv_data: Dict[str, A
                 "info_hash": selected_result.infoHash,
                 "url": selected_result.url,
                 "tv_data": next_tv_data,
+                "poster": item_data.get("poster"),
                 "is_torrent": False,
             },
         )

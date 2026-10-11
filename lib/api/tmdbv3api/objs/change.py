@@ -5,20 +5,16 @@ class Change(TMDb):
     _urls = {
         "movie": "/movie/changes",
         "tv": "/tv/changes",
-        "person": "/person/changes"
+        "person": "/person/changes",
     }
 
     def _change_list(self, change_type, start_date="", end_date="", page=1):
-        params = "page=%s" % page
+        params = f"page={page}"
         if start_date:
-            params += "&start_date=%s" % start_date
+            params += f"&start_date={start_date}"
         if end_date:
-            params += "&end_date=%s" % end_date
-        return self._request_obj(
-            self._urls[change_type],
-            params=params,
-            key="results"
-        )
+            params += f"&end_date={end_date}"
+        return self._request_obj(self._urls[change_type], params=params, key="results")
 
     def movie_change_list(self, start_date="", end_date="", page=1):
         """

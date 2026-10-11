@@ -1,6 +1,20 @@
 from datetime import datetime
 
 from lib.api.tmdbv3api.as_obj import AsObj
+from lib.api.trakt.trakt_utils import (
+    add_trakt_collection_context_menu,
+    add_trakt_custom_list_context_menu,
+    add_trakt_favorites_context_menu,
+    add_trakt_watched_context_menu,
+    add_trakt_watchlist_context_menu,
+    is_trakt_auth,
+)
+from lib.clients.tmdb.utils.utils import (
+    add_kodi_dir_item,
+    add_tmdb_movie_context_menu,
+    add_tmdb_show_context_menu,
+    tmdb_get,
+)
 from lib.utils.general.utils import set_pluging_category
 from lib.utils.kodi.utils import (
     add_directory_items_batch,
@@ -11,29 +25,17 @@ from lib.utils.kodi.utils import (
     notification,
     translation,
 )
-from lib.clients.tmdb.utils.utils import (
-    add_kodi_dir_item,
-    add_tmdb_movie_context_menu,
-    add_tmdb_show_context_menu,
-    tmdb_get,
-)
-from lib.api.trakt.trakt_utils import (
-    add_trakt_collection_context_menu,
-    add_trakt_custom_list_context_menu,
-    add_trakt_favorites_context_menu,
-    add_trakt_watchlist_context_menu,
-    add_trakt_watched_context_menu,
-    is_trakt_auth,
-)
+from lib.utils.nuvio_context import add_nuvio_history_context_menu
+from lib.utils.simkl_context import add_simkl_history_context_menu
 
 
 class BaseTmdbClient:
     @staticmethod
-    def add_media_directory_item(list_item, mode, title, ids, media_type="", batch=False):
+    def add_media_directory_item(
+        list_item, mode, title, ids, media_type="", batch=False, anime=False
+    ):
         if mode == "movies" or (mode == "multi" and media_type == "movie"):
-            context_menu = add_tmdb_movie_context_menu(
-                mode, media_type, title=title, ids=ids
-            )
+            context_menu = add_tmdb_movie_context_menu(mode, media_type, title=title, ids=ids)
             if is_trakt_auth():
                 context_menu += (
                     add_trakt_watchlist_context_menu("movies", ids)
@@ -42,6 +44,10 @@ class BaseTmdbClient:
                     + add_trakt_favorites_context_menu("movies", ids)
                     + add_trakt_custom_list_context_menu("movies", ids)
                 )
+            context_menu += add_simkl_history_context_menu("movie", ids.get("tmdb_id"))
+            context_menu += add_nuvio_history_context_menu(
+                "movie", ids.get("tmdb_id"), title=title
+            )
             list_item.addContextMenuItems(context_menu)
             list_item.setProperty("IsPlayable", "true")
             is_folder = False
@@ -67,6 +73,7 @@ class BaseTmdbClient:
             id=ids.get("tmdb_id"),
             title=title,
             media_type=media_type,
+            anime="1" if anime else "0",
         )
         if batch:
             return (url, list_item, is_folder)

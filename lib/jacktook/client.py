@@ -1,12 +1,13 @@
+from typing import Any, Callable, Dict, List, Optional
+
 from ..clients.base import BaseClient, TorrentStream
+from ..utils.kodi.utils import convert_size_to_bytes, get_setting
 from .providers import (
     burst_search,
     burst_search_episode,
     burst_search_movie,
     burst_search_season,
 )
-from ..utils.kodi.utils import convert_size_to_bytes, get_setting, kodilog
-from typing import List, Optional, Dict, Any, Callable
 
 
 class Burst(BaseClient):
@@ -22,15 +23,14 @@ class Burst(BaseClient):
         season: Optional[int],
         episode: Optional[int],
         silent: bool = False,
+        **kwargs: Any,
     ) -> Optional[List[TorrentStream]]:
         try:
             if mode == "tv" or media_type == "tv":
                 if get_setting("include_season_packs"):
                     results = burst_search_season(tmdb_id, query, season, silent=silent)
                 else:
-                    results = burst_search_episode(
-                        tmdb_id, query, season, episode, silent=silent
-                    )
+                    results = burst_search_episode(tmdb_id, query, season, episode, silent=silent)
             elif mode == "movies" or media_type == "movies":
                 results = burst_search_movie(tmdb_id, query, silent=silent)
             else:
@@ -39,7 +39,7 @@ class Burst(BaseClient):
                 results = self.parse_response(results)
             return results
         except Exception as e:
-            self.handle_exception(f"Burst error: {str(e)}")
+            self.handle_exception(f"Burst error: {e!s}")
 
     def parse_response(self, res: List[Dict[str, Any]]) -> List[TorrentStream]:
         results = []
@@ -70,6 +70,8 @@ class Burst(BaseClient):
                     )
                 )
             except (ValueError, TypeError) as e:
-                self.handle_exception(f"Burst parse error for result {getattr(r, 'title', '?')}: {e}")
+                self.handle_exception(
+                    f"Burst parse error for result {getattr(r, 'title', '?')}: {e}"
+                )
                 continue
         return results

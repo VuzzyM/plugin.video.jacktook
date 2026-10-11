@@ -1,5 +1,4 @@
-import pytest
-from lib.utils.parsers.title_parser import parse_title_info, extract_codec_hdr
+from lib.utils.parsers.title_parser import extract_codec_hdr, parse_title_info
 
 
 def test_parse_title_info_complex():
@@ -22,6 +21,21 @@ def test_parse_title_info_av1():
     title = "Movie.2024.2160p.AV1.DDP5.1-GROUP"
     info = parse_title_info(title)
     assert "AV1" in info["codec"]
+
+
+def test_parse_title_info_release_group_from_leading_brackets():
+    assert parse_title_info("[Judas] Show - 01 [1080p].mkv")["release_group"] == "Judas"
+    assert parse_title_info("[Erai-Raws] Show - 01 [1080p]")["release_group"] == "Erai-Raws"
+
+
+def test_parse_title_info_release_group_from_suffix_with_extension():
+    assert parse_title_info("Show.S01E01.1080p-ERai-Raws.mkv")["release_group"] == "ERai-Raws"
+
+
+def test_parse_title_info_release_group_rejects_ambiguous_or_technical_tags():
+    assert parse_title_info("[Judas][Erai-Raws] Show - 01")["release_group"] == ""
+    assert parse_title_info("Show.S01E01.1080p.WEB-DL.mkv")["release_group"] == ""
+    assert parse_title_info("Show.S01E01.1080p")["release_group"] == ""
 
 
 def test_extract_codec_hdr_hevc():

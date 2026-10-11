@@ -1,8 +1,9 @@
 from time import monotonic
 
 import xbmc
-from lib.api.trakt.trakt import TraktAPI
+
 from lib.api.trakt.lists_cache import lists_cache
+from lib.api.trakt.trakt import TraktAPI
 from lib.api.trakt.trakt_cache import (
     clear_trakt_calendar,
     clear_trakt_favorites,
@@ -10,15 +11,16 @@ from lib.api.trakt.trakt_cache import (
     clear_trakt_list_contents_data,
     clear_trakt_list_data,
     clear_trakt_watchlist,
-    reset_activity,
+    get_activity,
+    set_activity,
     trakt_watched_cache,
 )
-from lib.utils.kodi.utils import get_property_no_fallback, kodilog, get_setting
-
+from lib.utils.kodi.utils import get_property_no_fallback, get_setting, kodilog
 
 PAUSE_SERVICES_PROP = "jacktook.pause_services"
 DEFAULT_SYNC_INTERVAL_MINUTES = 15
 WAIT_STEP_SECONDS = 5
+
 
 class TraktSyncService:
     def __init__(self, api=None, monitor=None):
@@ -48,22 +50,12 @@ class TraktSyncService:
     ):
         duration_ms = int((monotonic() - started_at) * 1000)
         kodilog(
-            "Trakt sync[%s]: completed outcome=%s force=%s forced_defaults=%s detected_buckets=%s applied_buckets=%s duration_ms=%s"
-            % (
-                cycle_context,
-                outcome,
-                force,
-                forced_defaults,
-                self._format_buckets(detected_buckets),
-                self._format_buckets(applied_buckets),
-                duration_ms,
-            )
+            f"Trakt sync[{cycle_context}]: completed outcome={outcome} force={force} forced_defaults={forced_defaults} detected_buckets={self._format_buckets(detected_buckets)} applied_buckets={self._format_buckets(applied_buckets)} duration_ms={duration_ms}"
         )
 
     def _log_sync_failure(self, cycle_context, force, error):
         kodilog(
-            "Trakt sync[%s]: failed force=%s error=%s"
-            % (cycle_context, force, error),
+            f"Trakt sync[{cycle_context}]: failed force={force} error={error}",
             level=xbmc.LOGERROR,
         )
 
@@ -84,7 +76,6 @@ class TraktSyncService:
                 self.sync_activities(force=True)
             except Exception as e:
                 self._log_sync_failure("startup", True, e)
-                return
 
             while not self.monitor.abortRequested():
                 if self._wait_for_next_cycle():
@@ -101,7 +92,6 @@ class TraktSyncService:
                     self.sync_activities()
                 except Exception as e:
                     self._log_sync_failure("periodic", False, e)
-                    return
         except Exception as e:
             kodilog(f"Error during Trakt Sync: {e}", level=xbmc.LOGERROR)
         finally:
@@ -149,7 +139,7 @@ class TraktSyncService:
                 )
                 return set()
 
-            previous_activities = reset_activity(latest_activities)
+            previous_activities = get_activity()
             detected_buckets = self._get_changed_buckets(previous_activities, latest_activities)
             applied_buckets = set(detected_buckets)
             if force and not applied_buckets:
@@ -162,6 +152,7 @@ class TraktSyncService:
                 forced_defaults = True
 
             if not applied_buckets:
+                set_activity(latest_activities)
                 self._log_sync_summary(
                     cycle_context,
                     force,
@@ -173,11 +164,9 @@ class TraktSyncService:
                 )
                 return applied_buckets
 
-            kodilog(
-                "Trakt sync: changed buckets = %s"
-                % ", ".join(sorted(applied_buckets))
-            )
+            kodilog("Trakt sync: changed buckets = {}".format(", ".join(sorted(applied_buckets))))
             self._apply_activity_changes(applied_buckets)
+            set_activity(latest_activities)
             self._log_sync_summary(
                 cycle_context,
                 force,

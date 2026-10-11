@@ -1,89 +1,212 @@
+import hashlib
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional
-
-from lib.clients.stremio.helpers import (
-    get_addon_by_base_url,
-    get_selected_stream_addons,
-)
-from lib.clients.stremio.constants import STREMIO_ADDONS_KEY
-from lib.clients.stremio.addon_client import StremioAddonClient
-from lib.db.cached import cache
-from lib.domain.torrent import TorrentStream
-from lib.gui.custom_dialogs import source_select
-from lib.player import JacktookPLayer
-from lib.utils.clients.utils import get_client, update_dialog
-from lib.utils.general.utils import (
-    DialogListener,
-    Indexer,
-    SearchVariant,
-    cache_results,
-    get_cached_results,
-    pre_process,
-    post_process,
-    build_media_metadata,
-    set_content_type,
-    set_watched_title,
-    clean_auto_play_undesired,
-    normalize_tv_data,
-    safe_json_loads,
-)
-from lib.utils.debrid.debrid_utils import check_debrid_cached
-from lib.utils.kodi.settings import auto_play_enabled, get_setting
-from lib.utils.player.utils import resolve_playback_url
-from lib.utils.kodi.utils import (
-    notification,
-    cancel_playback,
-    kodilog,
-    translation,
-    close_busy_dialog,
-    ADDON_PATH,
-)
-
-from lib.gui.search_status_window import SearchTaskManager, SearchStatusWindow
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from typing import Any, List, Mapping, Optional
 
 import xbmc
 from xbmcgui import Dialog
 
+from lib.anime.stream_target import pick_kitsu_target, resolve_anime_route
+from lib.clients.nuvio.constants import NUVIO_ADDONS_KEY
+from lib.clients.nuvio.helpers import (
+    get_selected_stream_addon_records,
+)
+from lib.clients.nuvio.helpers import (
+    get_selected_stream_addons as get_selected_nuvio_stream_addons,
+)
+from lib.clients.stremio.addon_client import StremioAddonClient
+from lib.clients.stremio.constants import STREMIO_ADDON_ALIASES_KEY, STREMIO_ADDONS_KEY
+from lib.clients.stremio.helpers import (
+    get_addon_by_base_url,
+    get_addon_display_name,
+    get_selected_stream_addons,
+)
+from lib.clients.stremio.playback import (
+    StremioPlaybackError,
+    candidate_from_payload,
+    classify,
+    current_stremio_playback_capabilities,
+    normalize_stream,
+    payload_from_torrent,
+    resolve,
+)
+from lib.db.cached import cache
+from lib.domain.torrent import TorrentStream
+from lib.gui.custom_dialogs import source_select
+from lib.gui.search_status_window import SearchStatusWindow, SearchTaskManager
+from lib.player import JacktookPLayer
+from lib.utils.clients.utils import get_client, update_dialog
+from lib.utils.debrid.debrid_utils import check_debrid_cached, is_supported_debrid_type
+from lib.utils.general.utils import (
+    DialogListener,
+    Indexer,
+    IndexerType,
+    Players,
+    SearchVariant,
+    build_media_metadata,
+    cache_results,
+    clean_auto_play_undesired,
+    get_cached_results,
+    info_hash_to_magnet,
+    normalize_tv_data,
+    post_process,
+    pre_process,
+    safe_json_loads,
+    set_content_type,
+    set_watched_title,
+    truthy_param,
+)
+from lib.utils.kodi.settings import auto_play_enabled, get_setting
+from lib.utils.kodi.utils import (
+    ADDON_PATH,
+    cancel_playback,
+    close_busy_dialog,
+    kodilog,
+    notification,
+    translation,
+)
+from lib.utils.player.utils import resolve_playback_url
+from lib.utils.source_manager import parse_source_selection, reconcile_source_selection
 
 TITLE_LANGUAGE_LOCALIZED_FIRST = "localized_first"
 TITLE_LANGUAGE_ENGLISH_FIRST = "english_first"
 TITLE_LANGUAGE_ENGLISH_ONLY = "english_only"
+MAX_SEARCH_WORKERS = 8
+MAX_STREMIO_ADDONS_PER_SEARCH = 8
+
+
+class SearchCancelled(Exception):
+    """Raised when the user cancels an interactive search flow."""
+
+    def __init__(self, results: Optional[List[TorrentStream]] = None):
+        super().__init__("Search cancelled")
+        self.results = results or []
+
+
+class SilentProgressDialog:
+    """No-op progress dialog for flows that should not show Kodi progress UI."""
+
+    def create(self, *args, **kwargs):
+        pass
+
+    def update(self, *args, **kwargs):
+        pass
+
+    def close(self):
+        pass
 
 
 def _build_search_cache_scope(scoped_addon_url: str = "") -> str:
     flags = {
         "torrent": bool(get_setting("torrent_enable")),
+        "jackett": bool(get_setting("jackett_enabled")),
+        "prowlarr": bool(get_setting("prowlarr_enabled")),
+        "burst": bool(get_setting("jacktookburst_enabled")),
+        "jackgram": bool(get_setting("jackgram_enabled")),
+        "external_scraper": bool(get_setting("external_scraper_enabled")),
         "stremio": bool(get_setting("stremio_enabled")),
+        "nuvio": bool(get_setting("nuvio_enabled")),
         "rd": bool(get_setting("real_debrid_enabled")),
         "ad": bool(get_setting("alldebrid_enabled")),
         "tb": bool(get_setting("torbox_enabled")),
+        "oc": bool(get_setting("offcloud_enabled")),
         "pm": bool(get_setting("premiumize_enabled")),
         "db": bool(get_setting("debrider_enabled")),
         "ed": bool(get_setting("easydebrid_enabled")),
     }
     selected_stream_addons = str(cache.get(STREMIO_ADDONS_KEY) or "")
-    normalized_scoped_url = str(scoped_addon_url or "")
-    return "{}|{}|{}".format(
+    selected_nuvio_addons = str(cache.get(NUVIO_ADDONS_KEY) or "")
+    stremio_addon_aliases = json.dumps(cache.get(STREMIO_ADDON_ALIASES_KEY) or {}, sort_keys=True)
+    source_manager_selection = str(cache.get("source_manager_selection") or "")
+    external_scraper_module = str(get_setting("external_scraper_module") or "")
+    raw_scope = "{}|{}|{}|{}|{}|{}|{}".format(
         "|".join([f"{key}:{int(value)}" for key, value in sorted(flags.items())]),
         selected_stream_addons,
-        normalized_scoped_url,
+        selected_nuvio_addons,
+        stremio_addon_aliases,
+        source_manager_selection,
+        external_scraper_module,
+        str(scoped_addon_url or ""),
     )
+    return hashlib.sha256(raw_scope.encode("utf-8")).hexdigest()
 
 
-def _is_source_enabled(indexer_key, stremio_addon_key=None):
-    selection = cache.get("source_manager_selection")
-    if not selection:
-        return True
+def _filter_isolated_jackgram_cache_results(
+    query: str, results: List[TorrentStream]
+) -> List[TorrentStream]:
+    terms = str(query or "").casefold().split()
+    if not terms:
+        return results
+    return [
+        r
+        for r in results
+        if all(term in str(getattr(r, "title", "") or "").casefold() for term in terms)
+    ]
+
+
+def _search_worker_count() -> int:
     try:
-        selected = json.loads(selection) if isinstance(selection, str) else list(selection)
-    except (ValueError, TypeError):
+        configured = int(get_setting("thread_number", 6))
+    except (TypeError, ValueError):
+        configured = 6
+    return min(MAX_SEARCH_WORKERS, max(1, configured))
+
+
+BUILTIN_INDEXER_SETTINGS = {
+    Indexer.JACKETT: "jackett_enabled",
+    Indexer.PROWLARR: "prowlarr_enabled",
+    Indexer.BURST: "jacktookburst_enabled",
+    Indexer.JACKGRAM: "jackgram_enabled",
+    Indexer.EASYNEWS: "easynews_enabled",
+    Indexer.STREMIO: "stremio_enabled",
+    Indexer.EXTERNAL_SCRAPER: "external_scraper_enabled",
+}
+
+
+def _get_source_manager_selection() -> Optional[set]:
+    """Return the cached source-manager selection as a set of strings.
+
+    Missing or corrupt values return None so callers use the legacy open
+    fallback. A persisted empty list remains an explicit empty whitelist.
+    """
+    parsed = parse_source_selection(cache.get("source_manager_selection"))
+    return set(parsed) if parsed is not None else None
+
+
+def _is_source_enabled(indexer_key, stremio_addon_key=None, addon_origin="Stremio"):
+    selected = _get_source_manager_selection()
+
+    # Missing or corrupt cache → everything is enabled (no whitelist restriction)
+    if selected is None:
         return True
-    if not selected:
-        return True
+
+    # Compatible stream addons are keyed by their independent account origin.
     if stremio_addon_key:
-        return f"Stremio:{stremio_addon_key}" in selected
+        return f"{addon_origin}:{stremio_addon_key}" in selected
+
+    # External scraper uses its configured module name as the cache key.
+    # The fallback literal "External Scraper" supports older caches.
+    if indexer_key == Indexer.EXTERNAL_SCRAPER:
+        if not get_setting("external_scraper_enabled"):
+            return False
+        module_name = get_setting("external_scraper_module_name") or "External Scraper"
+        return module_name in selected or "External Scraper" in selected
+
+    # Managed builtin sources are enabled only when explicitly selected.
     return str(indexer_key) in selected
+
+
+def _is_enabled(setting_id):
+    value = get_setting(setting_id)
+    return value is True or str(value).lower() == "true"
+
+
+def _get_selected_nuvio_stream_addons_safe():
+    try:
+        return get_selected_nuvio_stream_addons()
+    except Exception as error:
+        kodilog(f"Unable to load selected Nuvio addons ({type(error).__name__})")
+        return []
 
 
 def _clean_title_candidate(value) -> str:
@@ -149,6 +272,27 @@ def _extract_english_tmdb_title(details, mode: str) -> str:
     return ""
 
 
+def _infer_tmdb_year(ids: dict, mode: str) -> Optional[int]:
+    if not ids or mode not in ("movies", "tv"):
+        return None
+    tmdb_id = ids.get("tmdb_id")
+    if not tmdb_id:
+        return None
+    try:
+        from lib.clients.tmdb.utils.utils import get_tmdb_media_details
+
+        details = get_tmdb_media_details(tmdb_id, mode)
+        date_value = (
+            getattr(details, "release_date", None)
+            if mode == "movies"
+            else getattr(details, "first_air_date", None)
+        )
+        return int(str(date_value)[:4]) if date_value else None
+    except Exception as e:
+        kodilog(f"Failed to infer TMDB year: {e}")
+        return None
+
+
 def _build_title_fallback_queries(
     query: str,
     ids: dict,
@@ -156,6 +300,7 @@ def _build_title_fallback_queries(
     variant: str = SearchVariant.DEFAULT,
     year: Optional[int] = None,
     title_language_mode: Optional[str] = None,
+    anime_target=None,
 ) -> List[str]:
     variant = _normalize_search_variant(variant)
     title_language_mode = _normalize_title_language_mode(
@@ -177,12 +322,25 @@ def _build_title_fallback_queries(
     if localized_candidate:
         candidates.append(localized_candidate)
 
+    anime_aliases: List[str] = []
+    if anime_target is not None:
+        # Anime identity titles (AniList/Simkl) are appended last: release
+        # groups index under the romaji or the official English title, which
+        # the TMDB candidates may not carry. A resolved route means the
+        # identity record is already cached, so this costs no extra call.
+        try:
+            from lib.anime.stream_target import resolve_title_aliases
+
+            anime_aliases = resolve_title_aliases(ids)
+        except Exception as e:
+            kodilog(f"Failed to resolve anime title aliases: {e}")
+
     if not ids:
-        return _unique_title_candidates(candidates)
+        return _unique_title_candidates(candidates + anime_aliases)
 
     tmdb_id = ids.get("tmdb_id")
     if not tmdb_id or mode not in ("movies", "tv"):
-        return _unique_title_candidates(candidates)
+        return _unique_title_candidates(candidates + anime_aliases)
 
     try:
         from lib.clients.tmdb.utils.utils import get_tmdb_media_details
@@ -193,12 +351,10 @@ def _build_title_fallback_queries(
         details = None
 
     if not details:
-        return _unique_title_candidates(candidates)
+        return _unique_title_candidates(candidates + anime_aliases)
 
     english_title = _extract_english_tmdb_title(details, mode)
-    original_title = getattr(details, "original_title", "") or getattr(
-        details, "original_name", ""
-    )
+    original_title = getattr(details, "original_title", "") or getattr(details, "original_name", "")
 
     english_candidate = ""
     original_candidate = ""
@@ -211,16 +367,7 @@ def _build_title_fallback_queries(
         if original_title:
             original_candidate = f"{original_title} {cleaned_year}"
 
-    if variant == SearchVariant.DEFAULT:
-        if title_language_mode == TITLE_LANGUAGE_ENGLISH_ONLY:
-            candidates = [english_candidate, original_candidate]
-            if not any(candidates) and localized_candidate:
-                candidates.append(localized_candidate)
-        elif title_language_mode == TITLE_LANGUAGE_ENGLISH_FIRST:
-            candidates = [english_candidate, original_candidate, localized_candidate]
-        else:
-            candidates = [localized_candidate, english_candidate, original_candidate]
-    elif variant == SearchVariant.TITLE_YEAR:
+    if variant == SearchVariant.DEFAULT or variant == SearchVariant.TITLE_YEAR:
         if title_language_mode == TITLE_LANGUAGE_ENGLISH_ONLY:
             candidates = [english_candidate, original_candidate]
             if not any(candidates) and localized_candidate:
@@ -244,6 +391,7 @@ def _build_title_fallback_queries(
         elif cleaned_query:
             candidates.append(cleaned_query)
 
+    candidates.extend(anime_aliases)
     return _unique_title_candidates(candidates)
 
 
@@ -257,6 +405,7 @@ def _perform_search_with_title_fallback(
     variant: str = SearchVariant.DEFAULT,
     year: Optional[int] = None,
     title_language_mode: str = TITLE_LANGUAGE_LOCALIZED_FIRST,
+    anime_target=None,
     **kwargs,
 ):
     variant = _normalize_search_variant(variant)
@@ -268,6 +417,7 @@ def _perform_search_with_title_fallback(
         variant,
         year,
         title_language_mode=title_language_mode,
+        anime_target=anime_target,
     )
 
     for attempt, candidate in enumerate(queries, start=1):
@@ -278,7 +428,14 @@ def _perform_search_with_title_fallback(
             )
 
         results = _perform_search(
-            indexer_key, dialog, candidate, mode, *args, variant=variant, year=year, **kwargs
+            indexer_key,
+            dialog,
+            candidate,
+            mode,
+            *args,
+            variant=variant,
+            year=year,
+            **kwargs,
         )
         if results:
             return results
@@ -286,7 +443,154 @@ def _perform_search_with_title_fallback(
     return []
 
 
+def _source_values(source: Any) -> Mapping[str, Any]:
+    if isinstance(source, Mapping):
+        return source
+    try:
+        return vars(source)
+    except TypeError:
+        return {}
+
+
+def _is_stremio_source(source: Any) -> bool:
+    values = _source_values(source)
+    return bool(
+        values.get("stremioMetadata")
+        or values.get("stremio_metadata")
+        or values.get("addonKey")
+        or values.get("addon_key")
+    )
+
+
+def _preferred_stremio_results(raw_streams: Any) -> List[TorrentStream]:
+    if not isinstance(raw_streams, (list, tuple)):
+        return []
+
+    results = []
+    for stream in raw_streams:
+        try:
+            candidate = normalize_stream(stream, origin="video")
+            decision = classify(candidate, current_stremio_playback_capabilities())
+            if not decision.supported:
+                continue
+        except (TypeError, ValueError):
+            continue
+        is_torrent = decision.source_class == "torrent_hash"
+        results.append(
+            TorrentStream(
+                title=candidate.title or candidate.name or candidate.filename or "",
+                type=IndexerType.TORRENT if is_torrent else "direct",
+                addonKey="stremio_video",
+                indexer=Indexer.STREMIO,
+                url=info_hash_to_magnet(candidate.infoHash) if is_torrent else candidate.url or "",
+                infoHash=candidate.infoHash or "",
+                size=candidate.size or 0,
+                streamSubtitles=list(candidate.subtitles),
+                stremioMetadata=dict(stream) if isinstance(stream, Mapping) else {},
+            )
+        )
+    return results
+
+
+def _stremio_metadata_diagnostics(candidate: Any) -> str:
+    fields = []
+    for field in ("title", "name", "filename"):
+        value = getattr(candidate, field, None)
+        if not isinstance(value, str):
+            continue
+        code_points = sorted(
+            {
+                f"U+{ord(character):04X}"
+                for character in value
+                if (ord(character) < 0x20 and ord(character) not in {0x09, 0x0A, 0x0D})
+                or ord(character) == 0x7F
+            }
+        )
+        if code_points:
+            fields.append(f"{field}={','.join(code_points)}")
+    return " ".join(fields)
+
+
+def _prepare_stremio_results(
+    results: List[TorrentStream],
+    notify_rejections: bool = True,
+    rejection_reasons: Optional[List[str]] = None,
+) -> List[TorrentStream]:
+    prepared = []
+    for source_index, result in enumerate(results):
+        if not _is_stremio_source(result):
+            prepared.append(result)
+            continue
+
+        payload = payload_from_torrent(result)
+        candidate = candidate_from_payload(payload)
+        decision = classify(candidate, current_stremio_playback_capabilities())
+        if decision.supported:
+            prepared.append(result)
+        else:
+            diagnostics = f"stremio_result index={source_index} decision={decision.code}"
+            if decision.code == "unsafe_metadata":
+                metadata_diagnostics = _stremio_metadata_diagnostics(candidate)
+                if metadata_diagnostics:
+                    diagnostics += f" {metadata_diagnostics}"
+            kodilog(diagnostics, xbmc.LOGWARNING)
+            if rejection_reasons is not None:
+                rejection_reasons.append(decision.reason)
+            if notify_rejections:
+                notification(decision.reason)
+    return prepared
+
+
+def _resolve_stremio_source(source: Any, context: Optional[Mapping[str, Any]] = None):
+    payload = payload_from_torrent(source)
+    candidate = candidate_from_payload(payload)
+    playback_context = dict(context or {})
+    playback_context.update(current_stremio_playback_capabilities())
+    decision = classify(candidate, playback_context)
+    playback_context["is_torrent"] = decision.source_class == "torrent_hash"
+
+    def legacy_resolver(resolved_payload, _context=None):
+        resolved_payload.update(dict(context or {}))
+        resolved_payload["is_torrent"] = playback_context["is_torrent"]
+        for key in ("type", "debrid_type", "indexer", "is_pack"):
+            if key in payload:
+                resolved_payload.setdefault(key, payload[key])
+        return resolve_playback_url(resolved_payload)
+
+    resolved = resolve(candidate, playback_context, legacy_resolver=legacy_resolver)
+    resolved.update(dict(context or {}))
+    for key in ("type", "debrid_type", "indexer", "is_pack"):
+        if key in payload:
+            resolved.setdefault(key, payload[key])
+    return resolved
+
+
+def _resolve_cached_source(source: Any, params: Mapping[str, Any]):
+    if _is_stremio_source(source):
+        return _resolve_stremio_source(
+            source,
+            {
+                "mode": params.get("mode", ""),
+                "ids": safe_json_loads(params.get("ids")),
+                "tv_data": safe_json_loads(params.get("tv_data") or "{}"),
+                "is_torrent": False,
+            },
+        )
+
+    legacy_source = source if isinstance(source, Mapping) else payload_from_torrent(source)
+    resolved = resolve_playback_url(legacy_source)
+    if resolved is None:
+        from lib.utils.player.utils import resolve_failure_reason
+
+        kodilog(f"resolve_cached_source_failed reason={resolve_failure_reason(legacy_source)}")
+    return resolved
+
+
 def _handle_super_quick_play(params: dict) -> bool:
+    if params.get("force_select"):
+        kodilog("Super quick play: force_select requested, skipping cached shortcut")
+        return False
+
     if not get_setting("super_quick_play", False):
         kodilog("Super quick play disabled")
         return False
@@ -297,7 +601,7 @@ def _handle_super_quick_play(params: dict) -> bool:
     if key:
         tv_data = safe_json_loads(params.get("tv_data") or "{}")
         if tv_data and "season" in tv_data and "episode" in tv_data:
-            key += f'_{tv_data["season"]}_{tv_data["episode"]}'
+            key += f"_{tv_data['season']}_{tv_data['episode']}"
 
     if not key:
         kodilog("Super quick play: No valid key found from ids")
@@ -308,31 +612,54 @@ def _handle_super_quick_play(params: dict) -> bool:
         kodilog("No cached media found")
         return False
 
-    kodilog(f"Found cached media: {cached_torrent['title']}")
+    def play_cached_source() -> bool:
+        def play(data: dict) -> None:
+            for key in (
+                "simkl_session_id",
+                "simkl_resume_progress",
+                "trakt_playback_id",
+                "trakt_resume_progress",
+                "nuvio_resume_percent",
+            ):
+                if key in params:
+                    data[key] = params[key]
+            player = JacktookPLayer()
+            player.run(data=data)
 
-    if get_setting("silent_resume", False):
-        playback_info = resolve_playback_url(cached_torrent)
+        cached_url = cached_torrent.get("url") if isinstance(cached_torrent, Mapping) else None
+        if isinstance(cached_url, str) and cached_url.startswith("plugin://"):
+            play(dict(cached_torrent))
+            return True
+
+        try:
+            playback_info = _resolve_cached_source(cached_torrent, params)
+        except StremioPlaybackError as error:
+            kodilog(
+                f"stremio_playback_error phase=super_quick_play code={error.code}",
+                xbmc.LOGWARNING,
+            )
+            notification(error.user_message)
+            return True
+        except Exception:
+            notification(translation(90144))
+            return True
+
         if not playback_info:
             notification(translation(90144))
             return True
 
-        player = JacktookPLayer()
-        player.run(data=playback_info)
+        play(playback_info)
         return True
+
+    if get_setting("silent_resume", False):
+        return play_cached_source()
 
     dialog = Dialog()
     if dialog.yesno(
         translation(90142),
         translation(90143),
     ):
-        playback_info = resolve_playback_url(cached_torrent)
-        if not playback_info:
-            notification(translation(90144))
-            return True
-
-        player = JacktookPLayer()
-        player.run(data=playback_info)
-        return True
+        return play_cached_source()
 
     kodilog("User chose not to play cached torrent")
     return False
@@ -348,6 +675,9 @@ def _process_search_results(
     query,
     media_type,
     rescrape,
+    suppress_debrid_dialog=False,
+    suppress_busy_dialog=False,
+    absolute_episode=None,
 ):
     bypassed_streams = []
     other_results = results
@@ -360,19 +690,11 @@ def _process_search_results(
             if result.addonKey and result.addonKey in bypass_addons:
                 return True
 
-            legacy_name = (result.addonName or result.indexer or "").lower()
+            legacy_name = (result.addonSourceName or result.indexer or "").lower()
             return any(addon == legacy_name for addon in bypass_addons)
 
-        bypassed_streams = [
-            res
-            for res in results
-            if is_bypassed(res)
-        ]
-        other_results = [
-            res
-            for res in results
-            if not is_bypassed(res)
-        ]
+        bypassed_streams = [res for res in results if is_bypassed(res)]
+        other_results = [res for res in results if not is_bypassed(res)]
 
     pre_results = []
     if other_results:
@@ -383,12 +705,20 @@ def _process_search_results(
             episode,
             season,
             skip_episode_filter=bool(scoped_addon_url),
+            absolute_episode=absolute_episode,
         )
 
     post_results = []
     if pre_results:
         post_results = process_results(
-            pre_results, query, mode, media_type, rescrape, episode
+            pre_results,
+            query,
+            mode,
+            media_type,
+            rescrape,
+            episode,
+            suppress_dialog=suppress_debrid_dialog,
+            suppress_busy_dialog=suppress_busy_dialog,
         )
 
     # Combine results, prioritizing bypassed streams exact native sorting
@@ -406,6 +736,22 @@ def run_search_entry(params: dict):
     tv_data = normalize_tv_data(safe_json_loads(params.get("tv_data")))
     direct = params.get("direct", False)
     rescrape = params.get("rescrape", False)
+    skip_cancel = params.get("skip_cancel_on_back", False)
+    jackgram_only = (
+        str(params.get("jackgram_only", "")).lower() == "true"
+        or params.get("jackgram_only") is True
+    )
+    playback_resume = {
+        key: params[key]
+        for key in (
+            "simkl_session_id",
+            "simkl_resume_progress",
+            "trakt_playback_id",
+            "trakt_resume_progress",
+            "nuvio_resume_percent",
+        )
+        if key in params
+    }
 
     variant = _normalize_search_variant(params.get("search_variant", SearchVariant.DEFAULT))
     title_language_mode = _normalize_title_language_mode(
@@ -420,10 +766,6 @@ def run_search_entry(params: dict):
             year = int(year)
         except (ValueError, TypeError):
             year = None
-
-    kodilog(
-        f"run_search_entry received: query={query}, mode={mode}, media_type={media_type}, variant={variant}, title_language_mode={title_language_mode}, year={year}, rescrape={rescrape}, force_select={params.get('force_select', False)}"
-    )
 
     library_data = None
     if params.get("stremio_addon_url") and params.get("stremio_catalog_type"):
@@ -440,28 +782,100 @@ def run_search_entry(params: dict):
     ep_name = tv_data.get("name", "")
     episode = tv_data.get("episode", 1)
     season = tv_data.get("season", 1)
+    air_date = tv_data.get("air_date")
 
     scoped_addon_url = params.get("scoped_addon_url", "")
+    if jackgram_only and scoped_addon_url:
+        scoped_addon_url = ""
 
-    results = search_client(
-        query,
-        ids,
-        mode,
-        media_type,
-        rescrape,
-        season,
-        episode,
-        scoped_addon_url=scoped_addon_url,
-        variant=variant,
-        title_language_mode=title_language_mode,
-        year=year,
+    # Dedicated anime marker, read once per search. It never travels inside "ids", which
+    # feeds cache keys, and a falsy marker does no provider work of any kind.
+    anime_target = None
+    absolute_episode = None
+    anime_marker = truthy_param(params.get("anime"))
+    kodilog(
+        f"[ANIME] search_entry marker={anime_marker} mode={mode} media_type={media_type} "
+        f"season={season} episode={episode}",
+        xbmc.LOGINFO,
     )
-    if not results:
+    if anime_marker:
+        try:
+            route = resolve_anime_route(ids, season, episode, air_date)
+            kodilog(
+                f"[ANIME] route resolved={route is not None} "
+                f"kitsu_id={getattr(route, 'kitsu_id', None)} "
+                f"absolute={getattr(route, 'absolute', None)} "
+                f"matched_by={getattr(route, 'matched_by', None)} "
+                f"anilist_id={getattr(route, 'anilist_id', None)} "
+                f"mal_id={getattr(route, 'mal_id', None)}",
+                xbmc.LOGINFO,
+            )
+            anime_target = pick_kitsu_target(route, season, episode)
+            absolute_episode = anime_target.episode if anime_target is not None else None
+            if anime_target is not None:
+                kodilog(
+                    f"[ANIME] target picked video_id={anime_target.video_id} "
+                    f"episode={anime_target.episode}",
+                    xbmc.LOGINFO,
+                )
+            else:
+                kodilog("[ANIME] target not_picked keeping existing id chain", xbmc.LOGINFO)
+        except Exception as error:
+            kodilog(f"[ANIME] route resolution failed: {error}", xbmc.LOGINFO)
+            anime_target, absolute_episode = None, None
+    else:
+        kodilog("[ANIME] route skipped marker_absent", xbmc.LOGINFO)
+    if anime_marker:
+        # Carry the anime signal into the playback data: both playback paths
+        # (auto play and source select) merge playback_context into the payload
+        # the player receives, letting the skip fetch resolve the anime route
+        # without any provider work for non-anime playbacks.
+        playback_resume = dict(playback_resume, anime=True)
+    preferred_stremio_streams = safe_json_loads(params.get("preferred_stremio_streams") or "[]")
+    preferred_results = _preferred_stremio_results(preferred_stremio_streams)
+
+    suppress_debrid_dialog = False
+    try:
+        results = search_client(
+            query,
+            ids,
+            mode,
+            media_type,
+            rescrape,
+            season,
+            episode,
+            scoped_addon_url=scoped_addon_url,
+            variant=variant,
+            title_language_mode=title_language_mode,
+            year=year,
+            jackgram_only=jackgram_only,
+            anime_target=anime_target,
+        )
+    except SearchCancelled as exc:
+        kodilog("Search cancelled from detailed status window")
+        results = exc.results
+        suppress_debrid_dialog = True
+        if results and not rescrape:
+            _cache_scope = _build_search_cache_scope(scoped_addon_url)
+            if jackgram_only:
+                _cache_scope = f"{_cache_scope}:jackgram"
+            cache_results(
+                results,
+                query,
+                mode,
+                media_type,
+                episode,
+                season,
+                cache_scope=_cache_scope,
+            )
+
+    if not results and not preferred_results:
         notification("No results found")
-        cancel_playback()
+        if not skip_cancel:
+            cancel_playback()
         return
 
-    final_results = _process_search_results(
+    final_results = _prepare_stremio_results(preferred_results) + _process_search_results(
         results,
         mode,
         ep_name,
@@ -471,30 +885,53 @@ def run_search_entry(params: dict):
         query,
         media_type,
         rescrape,
+        suppress_debrid_dialog=suppress_debrid_dialog,
+        absolute_episode=absolute_episode,
     )
 
     if not final_results:
         notification(translation(90358))
-        cancel_playback()
+        if not skip_cancel:
+            cancel_playback()
         return
 
     preferred_group = params.get("preferred_group")
     force_select = params.get("force_select", False)
+    autoplay_context = params.get("autoplay_context")
 
-    if auto_play_enabled() and not force_select:
-        if not auto_play(final_results, ids, tv_data, mode, preferred_group):
-            cancel_playback()
-        return
+    # Fixed: if Auto-Play is enabled but fails (most commonly because
+    # results exist but none match the preferred auto_play_quality), fall
+    # back to the manual source-select screen instead of just cancelling
+    # playback. The user still gets to pick a source manually rather than
+    # a bare "no sources" failure when sources did in fact exist.
+    autoplay_attempted = auto_play_enabled() and not force_select
+    if autoplay_attempted:
+        if auto_play(
+            final_results,
+            ids,
+            tv_data,
+            mode,
+            preferred_group,
+            autoplay_context=autoplay_context,
+            playback_context=playback_resume,
+        ):
+            return
 
-    if not show_source_select(
-        final_results,
-        mode,
-        ids,
-        tv_data,
-        query,
-        media_type,
-        rescrape,
-        direct,
+    if (
+        not show_source_select(
+            final_results,
+            mode,
+            ids,
+            tv_data,
+            query,
+            media_type,
+            rescrape,
+            direct,
+            autoplay_context=autoplay_context,
+            playback_context=playback_resume,
+            rejection_already_notified=autoplay_attempted,
+        )
+        and not skip_cancel
     ):
         cancel_playback()
 
@@ -502,13 +939,15 @@ def run_search_entry(params: dict):
 def _perform_search(indexer_key, dialog, *args, **kwargs):
     show_dialog = kwargs.pop("show_dialog", True)
     scoped_addon_url = kwargs.pop("scoped_addon_url", "")
+    addon_override = kwargs.pop("addon_override", None)
+    anime_target = kwargs.pop("anime_target", None)
 
     if indexer_key == Indexer.STREMIO:
         if scoped_addon_url:
-            addon = get_addon_by_base_url(scoped_addon_url)
+            addon = addon_override or get_addon_by_base_url(scoped_addon_url)
             stremio_addons = [addon] if addon else []
         else:
-            stremio_addons = get_selected_stream_addons()
+            stremio_addons = get_selected_stream_addons()[:MAX_STREMIO_ADDONS_PER_SEARCH]
         if not stremio_addons:
             notification("No Stremio addons selected")
             return []
@@ -522,30 +961,75 @@ def _perform_search(indexer_key, dialog, *args, **kwargs):
                 update_dialog(addon.manifest.name, "Searching...", dialog)
 
             video_id = None
-            original_id = ids_dict.get("original_id")
             media_kind = "series" if args[1] == "tv" or args[2] == "tv" else "movie"
+            addon_args = rest_args
 
-            if original_id:
-                prefix = original_id.split(":")[0]
-                if addon.isSupported("stream", media_kind, prefix):
-                    video_id = original_id
+            def _chain_video_id(addon, media_kind):
+                """Return the id this addon would get without an anime target.
 
-            # Try IMDb ID for addons that declare tt: prefix
-            if not video_id and ids_dict.get("imdb_id"):
-                if addon.isSupported("stream", media_kind, "tt"):
-                    video_id = ids_dict.get("imdb_id")
+                The original id when its prefix is supported, then IMDb, then
+                TMDB — the exact chain a not_picked route would have used.
+                """
+                original_id = ids_dict.get("original_id")
+                if original_id:
+                    prefix = original_id.split(":")[0]
+                    if addon.isSupported("stream", media_kind, prefix):
+                        return original_id
+                if ids_dict.get("imdb_id") and addon.isSupported("stream", media_kind, "tt"):
+                    return ids_dict.get("imdb_id")
+                if ids_dict.get("tmdb_id") and (
+                    addon.isSupported("stream", media_kind, "tmdb:")
+                    or addon.isSupported("stream", media_kind, "tmdb")
+                ):
+                    return f"tmdb:{ids_dict['tmdb_id']}"
+                return None
 
-            # Try TMDB ID for addons that declare tmdb: prefix
-            if not video_id and ids_dict.get("tmdb_id"):
-                if addon.isSupported("stream", media_kind, "tmdb:"):
-                    video_id = f"tmdb:{ids_dict['tmdb_id']}"
-                elif addon.isSupported("stream", media_kind, "tmdb"):
-                    video_id = f"tmdb:{ids_dict['tmdb_id']}"
+            video_id = _chain_video_id(addon, media_kind)
 
+            # A resolved anime route outranks every fallback below: the Kitsu id already
+            # carries the absolute episode number, so the addon receives that number in
+            # place of the season/episode pair. Addons without kitsu keep the chain below.
+            kitsu_supported = (
+                addon.isSupported("stream", media_kind, "kitsu")
+                if anime_target is not None
+                else False
+            )
+            if anime_target is not None:
+                kodilog(
+                    f"[ANIME] addon name={addon.manifest.name} kitsu_supported={kitsu_supported}",
+                    xbmc.LOGINFO,
+                )
+            kitsu_used = False
+            if anime_target is not None and kitsu_supported:
+                video_id = anime_target.video_id
+                addon_args = (rest_args[0], rest_args[1], rest_args[2], anime_target.episode)
+                kitsu_used = True
+
+            if anime_target is not None:
+                kodilog(
+                    f"[ANIME] request addon={addon.manifest.name} video_id={video_id} "
+                    f"args={addon_args}",
+                    xbmc.LOGINFO,
+                )
             if video_id:
                 try:
                     client = StremioAddonClient(addon)
-                    results.extend(client.search(video_id, *rest_args))
+                    addon_results = client.search(video_id, *addon_args)
+                    if not addon_results and kitsu_used:
+                        # The addon declares kitsu support but holds nothing for this id
+                        # (newer cour entries are often unmapped in its metadata sync).
+                        # Re-search the exact id chain a not_picked route would have
+                        # used, so an empty native route never costs the user the
+                        # results the old path still delivers.
+                        fallback_video_id = _chain_video_id(addon, media_kind)
+                        if fallback_video_id:
+                            kodilog(
+                                f"[ANIME] kitsu route empty on {addon.manifest.name}, "
+                                "falling back to the id chain",
+                                xbmc.LOGINFO,
+                            )
+                            addon_results = client.search(fallback_video_id, *rest_args)
+                    results.extend(addon_results)
                 except Exception as e:
                     kodilog(f"Error searching {addon.manifest.name}: {e}")
 
@@ -578,6 +1062,9 @@ def _submit_search_tasks(
     variant: str = SearchVariant.DEFAULT,
     title_language_mode: str = TITLE_LANGUAGE_LOCALIZED_FIRST,
     year: Optional[int] = None,
+    title_aliases: Optional[List[str]] = None,
+    jackgram_only: bool = False,
+    anime_target=None,
 ):
     def submit_performer(*args, **kwargs):
         if "show_dialog" not in kwargs:
@@ -590,21 +1077,45 @@ def _submit_search_tasks(
             kwargs["title_language_mode"] = title_language_mode
         if "year" not in kwargs:
             kwargs["year"] = year
+        # Only a resolved route is forwarded, so every non-anime search keeps the exact
+        # kwargs it submits today.
+        if anime_target is not None and "anime_target" not in kwargs:
+            kwargs["anime_target"] = anime_target
         return executor.submit(
             _perform_search,
             *args,
             **kwargs,
         )
 
+    if jackgram_only:
+        if _is_source_enabled(Indexer.JACKGRAM):
+            add_task_if_enabled(
+                executor,
+                tasks,
+                "jackgram_enabled",
+                Indexer.JACKGRAM,
+                _perform_search,
+                dialog,
+                tmdb_id,
+                query,
+                mode,
+                media_type,
+                season,
+                episode,
+                show_dialog=show_dialog,
+                scoped_addon_url=scoped_addon_url,
+            )
+        return
+
     if scoped_addon_url:
         addon = get_addon_by_base_url(scoped_addon_url)
-        if addon and (
-            ids.get("imdb_id") or ids.get("original_id") or ids.get("tmdb_id")
-        ) and _is_source_enabled(Indexer.STREMIO, addon.key()):
+        if (
+            addon
+            and (ids.get("imdb_id") or ids.get("original_id") or ids.get("tmdb_id"))
+            and _is_source_enabled(Indexer.STREMIO, addon.key())
+        ):
             tasks.append(
-                submit_performer(
-                    Indexer.STREMIO, dialog, ids, mode, media_type, season, episode
-                )
+                submit_performer(Indexer.STREMIO, dialog, ids, mode, media_type, season, episode)
             )
     else:
         if _is_source_enabled(Indexer.EASYNEWS):
@@ -626,6 +1137,7 @@ def _submit_search_tasks(
                 variant=variant,
                 title_language_mode=title_language_mode,
                 year=year,
+                anime_target=anime_target,
             )
         if _is_source_enabled(Indexer.BURST):
             add_task_if_enabled(
@@ -662,6 +1174,7 @@ def _submit_search_tasks(
                     variant=variant,
                     title_language_mode=title_language_mode,
                     year=year,
+                    anime_target=anime_target,
                 )
             )
         if _is_source_enabled(Indexer.JACKETT):
@@ -682,6 +1195,7 @@ def _submit_search_tasks(
                 variant=variant,
                 title_language_mode=title_language_mode,
                 year=year,
+                anime_target=anime_target,
             )
         if _is_source_enabled(Indexer.JACKGRAM):
             add_task_if_enabled(
@@ -700,18 +1214,66 @@ def _submit_search_tasks(
                 show_dialog=show_dialog,
                 scoped_addon_url=scoped_addon_url,
             )
-        if get_setting("stremio_enabled") and (
-            ids.get("imdb_id") or ids.get("original_id")
-        ) and _is_source_enabled(Indexer.STREMIO):
-            tasks.append(
-                submit_performer(
-                    Indexer.STREMIO, dialog, ids, mode, media_type, season, episode
-                )
+        if _is_source_enabled(Indexer.EXTERNAL_SCRAPER):
+            add_task_if_enabled(
+                executor,
+                tasks,
+                "external_scraper_enabled",
+                Indexer.EXTERNAL_SCRAPER,
+                _perform_search,
+                dialog,
+                tmdb_id,
+                query,
+                mode,
+                media_type,
+                season,
+                episode,
+                show_dialog=show_dialog,
+                scoped_addon_url=scoped_addon_url,
+                imdb_id=imdb_id or "",
+                tvdb_id=(ids or {}).get("tvdb_id", ""),
+                year=str(year) if year else "",
+                aliases=title_aliases,
             )
+        if get_setting("stremio_enabled") and (
+            ids.get("imdb_id") or ids.get("original_id") or ids.get("tmdb_id")
+        ):
+            for addon in get_selected_stream_addons()[:MAX_STREMIO_ADDONS_PER_SEARCH]:
+                if _is_source_enabled(Indexer.STREMIO, addon.key()):
+                    tasks.append(
+                        submit_performer(
+                            Indexer.STREMIO,
+                            dialog,
+                            ids,
+                            mode,
+                            media_type,
+                            season,
+                            episode,
+                            scoped_addon_url=addon.url(),
+                        )
+                    )
+        if _is_enabled("nuvio_enabled") and (
+            ids.get("imdb_id") or ids.get("original_id") or ids.get("tmdb_id")
+        ):
+            for addon in _get_selected_nuvio_stream_addons_safe()[:MAX_STREMIO_ADDONS_PER_SEARCH]:
+                if _is_source_enabled(Indexer.STREMIO, addon.key(), addon_origin="Nuvio"):
+                    tasks.append(
+                        submit_performer(
+                            Indexer.STREMIO,
+                            dialog,
+                            ids,
+                            mode,
+                            media_type,
+                            season,
+                            episode,
+                            scoped_addon_url=addon.url(),
+                            addon_override=addon,
+                        )
+                    )
 
 
 def _collect_search_results(tasks, listener, show_dialog) -> List[TorrentStream]:
-    total_results = []
+    results_by_future = {}
     total_tasks = len(tasks)
     completed_tasks = 0
 
@@ -720,22 +1282,23 @@ def _collect_search_results(tasks, listener, show_dialog) -> List[TorrentStream]
             completed_tasks += 1
             if show_dialog and total_tasks > 0:
                 percent = int(completed_tasks / total_tasks * 100)
-                update_dialog(
-                    "Searching", f"Searching... {percent}%", listener.dialog, percent
-                )
+                update_dialog("Searching", f"Searching... {percent}%", listener.dialog, percent)
 
             results = future.result()
-            kodilog(f"Results from {future}: {results}", level=xbmc.LOGDEBUG)
-            if results:
-                total_results.extend(results)
+            kodilog(
+                f"Search task completed with {len(results) if results else 0} result(s)",
+                level=xbmc.LOGDEBUG,
+            )
+            results_by_future[future] = results or []
         except Exception as e:
             import traceback
 
             error_details = traceback.format_exc()
-            kodilog(
-                f"Error resolving future result in thread pool: {e}\n{error_details}"
-            )
+            kodilog(f"Error resolving future result in thread pool: {e}\n{error_details}")
 
+    total_results = []
+    for future in tasks:
+        total_results.extend(results_by_future.get(future, []))
     return total_results
 
 
@@ -754,6 +1317,9 @@ def _submit_search_tasks_managed(
     variant: str = SearchVariant.DEFAULT,
     title_language_mode: str = TITLE_LANGUAGE_LOCALIZED_FIRST,
     year: Optional[int] = None,
+    title_aliases: Optional[List[str]] = None,
+    jackgram_only: bool = False,
+    anime_target=None,
 ):
     def submit_performer_managed(name, indexer_key, *args, **kwargs):
         kwargs["show_dialog"] = False
@@ -765,6 +1331,10 @@ def _submit_search_tasks_managed(
             kwargs["title_language_mode"] = title_language_mode
         if "year" not in kwargs:
             kwargs["year"] = year
+        # Only a resolved route is forwarded, so every non-anime search keeps the exact
+        # kwargs it submits today.
+        if anime_target is not None and "anime_target" not in kwargs:
+            kwargs["anime_target"] = anime_target
         return manager.submit_task(
             name,
             indexer_key,
@@ -774,13 +1344,34 @@ def _submit_search_tasks_managed(
             **kwargs,
         )
 
+    if jackgram_only:
+        if _is_source_enabled(Indexer.JACKGRAM):
+            add_task_if_enabled_managed(
+                manager,
+                "jackgram_enabled",
+                Indexer.JACKGRAM,
+                _perform_search,
+                dialog,
+                tmdb_id,
+                query,
+                mode,
+                media_type,
+                season,
+                episode,
+                show_dialog=False,
+                scoped_addon_url=scoped_addon_url,
+            )
+        return
+
     if scoped_addon_url:
         addon = get_addon_by_base_url(scoped_addon_url)
-        if addon and (
-            ids.get("imdb_id") or ids.get("original_id") or ids.get("tmdb_id")
-        ) and _is_source_enabled(Indexer.STREMIO, addon.key()):
+        if (
+            addon
+            and (ids.get("imdb_id") or ids.get("original_id") or ids.get("tmdb_id"))
+            and _is_source_enabled(Indexer.STREMIO, addon.key())
+        ):
             submit_performer_managed(
-                addon.manifest.name,
+                get_addon_display_name(addon),
                 Indexer.STREMIO,
                 dialog,
                 ids,
@@ -809,6 +1400,7 @@ def _submit_search_tasks_managed(
                 variant=variant,
                 title_language_mode=title_language_mode,
                 year=year,
+                anime_target=anime_target,
             )
         if _is_source_enabled(Indexer.BURST):
             add_task_if_enabled_managed(
@@ -845,6 +1437,7 @@ def _submit_search_tasks_managed(
                 variant=variant,
                 title_language_mode=title_language_mode,
                 year=year,
+                anime_target=anime_target,
             )
         if _is_source_enabled(Indexer.JACKETT):
             add_task_if_enabled_managed(
@@ -863,6 +1456,7 @@ def _submit_search_tasks_managed(
                 variant=variant,
                 title_language_mode=title_language_mode,
                 year=year,
+                anime_target=anime_target,
             )
         if _is_source_enabled(Indexer.JACKGRAM):
             add_task_if_enabled_managed(
@@ -880,10 +1474,31 @@ def _submit_search_tasks_managed(
                 show_dialog=False,
                 scoped_addon_url=scoped_addon_url,
             )
+        if _is_source_enabled(Indexer.EXTERNAL_SCRAPER):
+            module_display_name = get_setting("external_scraper_module_name") or "External Scraper"
+            manager.submit_task(
+                module_display_name,
+                Indexer.EXTERNAL_SCRAPER,
+                _perform_search,
+                Indexer.EXTERNAL_SCRAPER,
+                dialog,
+                tmdb_id,
+                query,
+                mode,
+                media_type,
+                season,
+                episode,
+                show_dialog=False,
+                scoped_addon_url=scoped_addon_url,
+                imdb_id=imdb_id or "",
+                tvdb_id=(ids or {}).get("tvdb_id", ""),
+                year=str(year) if year else "",
+                aliases=title_aliases,
+            )
         if get_setting("stremio_enabled") and (
-            ids.get("imdb_id") or ids.get("original_id")
+            ids.get("imdb_id") or ids.get("original_id") or ids.get("tmdb_id")
         ):
-            stremio_addons = get_selected_stream_addons()
+            stremio_addons = get_selected_stream_addons()[:MAX_STREMIO_ADDONS_PER_SEARCH]
             filtered_addons = [
                 addon
                 for addon in stremio_addons
@@ -891,7 +1506,7 @@ def _submit_search_tasks_managed(
             ]
             for addon in filtered_addons:
                 submit_performer_managed(
-                    addon.manifest.name,
+                    get_addon_display_name(addon),
                     Indexer.STREMIO,
                     dialog,
                     ids,
@@ -901,41 +1516,106 @@ def _submit_search_tasks_managed(
                     episode,
                     scoped_addon_url=addon.url(),
                 )
+        if _is_enabled("nuvio_enabled") and (
+            ids.get("imdb_id") or ids.get("original_id") or ids.get("tmdb_id")
+        ):
+            nuvio_addons = _get_selected_nuvio_stream_addons_safe()[:MAX_STREMIO_ADDONS_PER_SEARCH]
+            for addon in nuvio_addons:
+                if _is_source_enabled(Indexer.STREMIO, addon.key(), addon_origin="Nuvio"):
+                    submit_performer_managed(
+                        f"Nuvio: {addon.manifest.name or addon.manifest.id}",
+                        Indexer.STREMIO,
+                        dialog,
+                        ids,
+                        mode,
+                        media_type,
+                        season,
+                        episode,
+                        scoped_addon_url=addon.url(),
+                        addon_override=addon,
+                    )
 
 
-def search_client(
+def _check_search_caches(
     query: str,
     ids: dict,
     mode: str,
     media_type: str,
-    rescrape: bool,
+    episode: int,
+    season: int,
+    cache_scope: str,
+    allow_autoscrape_fallback: bool = True,
+) -> Optional[List[TorrentStream]]:
+    """Check the scoped cache and, optionally, the autoscrape fallback cache.
+
+    Returns cached results if found (even an empty list), or None if
+    no cache entry exists (caller should perform a fresh search).
+    """
+    cached = get_cached_results(
+        query,
+        mode,
+        media_type,
+        episode,
+        season,
+        cache_scope=cache_scope,
+    )
+    if cached is not None:
+        return cached
+
+    # Fallback: autoscrape cache (PlayNext background scrape) under
+    # ``as_results:{id}_{season}_{episode}``.
+    if not allow_autoscrape_fallback or (mode != "tv" and media_type != "tv"):
+        return None
+    id_value = (
+        (ids or {}).get("original_id") or (ids or {}).get("imdb_id") or (ids or {}).get("tmdb_id")
+    )
+    if id_value is None or season is None or episode is None:
+        return None
+
+    from lib.db.cached import cache as _cache
+    from lib.utils.player.utils import get_autoscrape_results_cache_key
+
+    as_key = get_autoscrape_results_cache_key(id_value, season, episode)
+    as_results = _cache.get(as_key)
+    if as_results is None:
+        return None
+
+    kodilog(f"[CACHE] Autoscrape cache HIT for {as_key}, reusing {len(as_results)} results")
+    cache_results(
+        as_results,
+        query,
+        mode,
+        media_type,
+        episode,
+        season,
+        cache_scope=cache_scope,
+    )
+    return as_results
+
+
+def _run_detailed_search(
+    query: str,
+    ids: dict,
+    mode: str,
+    media_type: str,
     season: int,
     episode: int,
-    show_dialog: bool = True,
-    scoped_addon_url: str = "",
-    variant: str = SearchVariant.DEFAULT,
-    title_language_mode: str = TITLE_LANGUAGE_LOCALIZED_FIRST,
-    year: Optional[int] = None,
+    scoped_addon_url: str,
+    tmdb_id: Optional[int],
+    imdb_id: Optional[str],
+    variant: str,
+    title_language_mode: str,
+    year: Optional[int],
+    title_aliases: List[str],
+    jackgram_only: bool = False,
+    anime_target=None,
 ) -> List[TorrentStream]:
-    close_busy_dialog()
-    cache_scope = _build_search_cache_scope(scoped_addon_url)
-
-    if not rescrape:
-        cached_results = get_cached_results(
-            query, mode, media_type, episode, cache_scope=cache_scope
-        )
-        if cached_results:
-            return cached_results
-
-    tmdb_id, imdb_id = (ids.get("tmdb_id"), ids.get("imdb_id")) if ids else (None, None)
-    total_results = []
-    tasks = []
-
-    use_detailed_status = show_dialog and get_setting("search_dialog_style", "0") == "1"
-
-    if use_detailed_status:
-        executor = ThreadPoolExecutor(max_workers=int(get_setting("thread_number", 6)))
-        manager = SearchTaskManager(executor)
+    """Search with SearchStatusWindow (``search_dialog_style=1``)."""
+    if jackgram_only:
+        scoped_addon_url = ""
+    executor = ThreadPoolExecutor(max_workers=_search_worker_count())
+    manager = SearchTaskManager(executor)
+    try:
         _submit_search_tasks_managed(
             manager,
             None,
@@ -951,6 +1631,9 @@ def search_client(
             variant=variant,
             title_language_mode=title_language_mode,
             year=year,
+            title_aliases=title_aliases,
+            jackgram_only=jackgram_only,
+            anime_target=anime_target,
         )
 
         item_info = {"ids": ids, "mode": mode}
@@ -963,43 +1646,196 @@ def search_client(
             task_manager=manager,
             item_information=item_info,
         )
-        window.doModal()
-        del window
-
-        total_results = manager.collect_results()
+        try:
+            window.show()
+            window.run_until_complete()
+        finally:
+            del window
 
         if manager.is_cancelled:
-            executor.shutdown(wait=False)
-        else:
-            executor.shutdown(wait=False)
+            manager.cancel_pending()
+            raise SearchCancelled(manager.collect_results())
+
+        return manager.collect_results()
+    except Exception:
+        manager.cancel_pending()
+        raise
+    finally:
+        executor.shutdown(wait=False)
+
+
+def _run_simple_search(
+    query: str,
+    ids: dict,
+    mode: str,
+    media_type: str,
+    season: int,
+    episode: int,
+    scoped_addon_url: str,
+    tmdb_id: Optional[int],
+    imdb_id: Optional[str],
+    show_dialog: bool,
+    variant: str,
+    title_language_mode: str,
+    year: Optional[int],
+    title_aliases: List[str],
+    jackgram_only: bool = False,
+    anime_target=None,
+) -> List[TorrentStream]:
+    """Search with a simple progress dialog (``search_dialog_style=0``)."""
+    if jackgram_only:
+        scoped_addon_url = ""
+    tasks: List[Future] = []
+    with DialogListener() as listener:
+        if show_dialog:
+            listener.dialog.create("")
+
+        with ThreadPoolExecutor(max_workers=_search_worker_count()) as executor:
+            _submit_search_tasks(
+                executor,
+                tasks,
+                listener.dialog,
+                query,
+                mode,
+                media_type,
+                season,
+                episode,
+                ids,
+                scoped_addon_url,
+                tmdb_id,
+                imdb_id,
+                show_dialog,
+                variant=variant,
+                title_language_mode=title_language_mode,
+                year=year,
+                title_aliases=title_aliases,
+                jackgram_only=jackgram_only,
+                anime_target=anime_target,
+            )
+            total_results = _collect_search_results(tasks, listener, show_dialog)
+
+    return total_results
+
+
+def search_client(
+    query: str,
+    ids: dict,
+    mode: str,
+    media_type: str,
+    rescrape: bool,
+    season: int,
+    episode: int,
+    show_dialog: bool = True,
+    scoped_addon_url: str = "",
+    variant: str = SearchVariant.DEFAULT,
+    title_language_mode: str = TITLE_LANGUAGE_LOCALIZED_FIRST,
+    year: Optional[int] = None,
+    jackgram_only: bool = False,
+    anime_target=None,
+) -> List[TorrentStream]:
+    close_busy_dialog()
+    reconcile_source_selection(
+        cache_backend=cache,
+        settings_getter=get_setting,
+        stremio_addons_getter=get_selected_stream_addons,
+        nuvio_addons_getter=get_selected_stream_addon_records,
+    )
+    if year is None:
+        year = _infer_tmdb_year(ids, mode)
+
+    title_aliases = _build_title_fallback_queries(
+        query,
+        ids,
+        mode,
+        SearchVariant.DEFAULT,
+        year,
+        title_language_mode=title_language_mode,
+        anime_target=anime_target,
+    )
+    if jackgram_only and scoped_addon_url:
+        scoped_addon_url = ""
+    cache_scope = _build_search_cache_scope(scoped_addon_url)
+    if jackgram_only:
+        cache_scope = f"{cache_scope}:jackgram"
+
+    if not rescrape:
+        cached = _check_search_caches(
+            query,
+            ids,
+            mode,
+            media_type,
+            episode,
+            season,
+            cache_scope,
+            allow_autoscrape_fallback=not jackgram_only,
+        )
+        if cached is not None:
+            if jackgram_only:
+                return _filter_isolated_jackgram_cache_results(query, cached)
+            return cached
+
+    tmdb_id, imdb_id = (ids.get("tmdb_id"), ids.get("imdb_id")) if ids else (None, None)
+
+    if show_dialog and get_setting("search_dialog_style", "0") == "1":
+        try:
+            total_results = _run_detailed_search(
+                query,
+                ids,
+                mode,
+                media_type,
+                season,
+                episode,
+                scoped_addon_url,
+                tmdb_id,
+                imdb_id,
+                variant,
+                title_language_mode,
+                year,
+                title_aliases,
+                jackgram_only=jackgram_only,
+                anime_target=anime_target,
+            )
+        except SearchCancelled:
+            raise
+        except Exception as e:
+            kodilog(f"Detailed search status failed, falling back to simple search: {e}")
+            total_results = _run_simple_search(
+                query,
+                ids,
+                mode,
+                media_type,
+                season,
+                episode,
+                scoped_addon_url,
+                tmdb_id,
+                imdb_id,
+                True,
+                variant,
+                title_language_mode,
+                year,
+                title_aliases,
+                jackgram_only=jackgram_only,
+                anime_target=anime_target,
+            )
     else:
-        with DialogListener() as listener:
-            if show_dialog:
-                listener.dialog.create("")
-
-            with ThreadPoolExecutor(
-                max_workers=int(get_setting("thread_number", 6))
-            ) as executor:
-                _submit_search_tasks(
-                    executor,
-                    tasks,
-                    listener.dialog,
-                    query,
-                    mode,
-                    media_type,
-                    season,
-                    episode,
-                    ids,
-                    scoped_addon_url,
-                    tmdb_id,
-                    imdb_id,
-                    show_dialog,
-                    variant=variant,
-                    title_language_mode=title_language_mode,
-                    year=year,
-                )
-
-                total_results = _collect_search_results(tasks, listener, show_dialog)
+        total_results = _run_simple_search(
+            query,
+            ids,
+            mode,
+            media_type,
+            season,
+            episode,
+            scoped_addon_url,
+            tmdb_id,
+            imdb_id,
+            show_dialog,
+            variant,
+            title_language_mode,
+            year,
+            title_aliases,
+            jackgram_only=jackgram_only,
+            anime_target=anime_target,
+        )
 
     cache_results(
         total_results,
@@ -1007,6 +1843,7 @@ def search_client(
         mode,
         media_type,
         episode,
+        season,
         cache_scope=cache_scope,
     )
     return total_results
@@ -1019,8 +1856,11 @@ def pre_process_results(
     episode: int,
     season: int,
     skip_episode_filter: bool = False,
+    absolute_episode: Optional[int] = None,
 ) -> List[TorrentStream]:
-    return pre_process(results, mode, ep_name, episode, season, skip_episode_filter)
+    return pre_process(
+        results, mode, ep_name, episode, season, skip_episode_filter, absolute_episode
+    )
 
 
 def process_results(
@@ -1030,15 +1870,23 @@ def process_results(
     media_type: str,
     rescrape: bool,
     episode: int,
+    suppress_dialog: bool = False,
+    suppress_busy_dialog: bool = False,
 ) -> List[TorrentStream]:
     torrent_results = []
     if get_setting("torrent_enable"):
         torrent_results = post_process(pre_results)
-    close_busy_dialog()
-    with DialogListener() as listener:
+    if not suppress_busy_dialog:
+        close_busy_dialog()
+    if suppress_dialog:
         debrid_results = check_debrid_cached(
-            query, pre_results, mode, media_type, listener.dialog, rescrape, episode
+            query, pre_results, mode, media_type, SilentProgressDialog(), rescrape, episode
         )
+    else:
+        with DialogListener() as listener:
+            debrid_results = check_debrid_cached(
+                query, pre_results, mode, media_type, listener.dialog, rescrape, episode
+            )
     return debrid_results + torrent_results
 
 
@@ -1051,7 +1899,21 @@ def show_source_select(
     media_type: str,
     rescrape: bool,
     direct: bool = False,
+    autoplay_context: Optional[str] = None,
+    playback_context: Optional[dict] = None,
+    rejection_already_notified: bool = False,
 ) -> bool:
+    rejection_reasons = []
+    results = _prepare_stremio_results(
+        results,
+        notify_rejections=False,
+        rejection_reasons=rejection_reasons,
+    )
+    if not results:
+        if rejection_reasons and not rejection_already_notified:
+            notification(rejection_reasons[0])
+        return False
+
     item_info = {
         "tv_data": tv_data,
         "ids": ids,
@@ -1060,19 +1922,40 @@ def show_source_select(
         "media_type": media_type,
         "rescrape": rescrape,
     }
+    if autoplay_context:
+        item_info["playnext_context"] = True
+        item_info["direct_play"] = True
+    if playback_context:
+        item_info.update(playback_context)
 
     if not direct and ids:
         item_info.update(build_media_metadata(ids, mode))
 
-    kodilog(
-        f"show_source_select context: query={query}, mode={mode}, media_type={media_type}, year={item_info.get('year')}, ids={ids}"
-    )
-
-    xml_file_string = (
-        "source_select_direct.xml" if mode == "direct" else "source_select.xml"
-    )
+    xml_file_string = "source_select_direct.xml" if mode == "direct" else "source_select.xml"
 
     return source_select(item_info, xml_file=xml_file_string, sources=results)
+
+
+def _autoplay_description(source: TorrentStream, ids: dict, mode: str) -> str:
+    if not (get_setting("torrent_enable") and get_setting("torrent_client") == Players.JACKTORR):
+        return ""
+
+    if _is_stremio_source(source):
+        payload = payload_from_torrent(source)
+        decision = classify(
+            candidate_from_payload(payload), current_stremio_playback_capabilities()
+        )
+        if decision.source_class != "torrent_hash" or is_supported_debrid_type(
+            payload.get("debrid_type", "")
+        ):
+            return ""
+    elif source.type in (
+        IndexerType.DIRECT,
+        IndexerType.STREMIO_DEBRID,
+    ) or is_supported_debrid_type(source.debridType):
+        return ""
+
+    return build_media_metadata(ids or {}, mode).get("overview") or ""
 
 
 def auto_play(
@@ -1082,11 +1965,13 @@ def auto_play(
     mode,
     preferred_group=None,
     force_select=False,
+    autoplay_context: Optional[str] = None,
+    playback_context: Optional[dict] = None,
 ) -> bool:
     if force_select:
         return False
 
-    filtered_results = clean_auto_play_undesired(results)
+    filtered_results = clean_auto_play_undesired(_prepare_stremio_results(results))
     if not filtered_results:
         notification("No suitable source found for auto play.")
         return False
@@ -1102,29 +1987,56 @@ def auto_play(
 
     selected_result = quality_matches[0]
     if preferred_group:
-        group_matches = [
-            r for r in quality_matches if preferred_group.lower() in r.title.lower()
-        ]
+        group_matches = [r for r in quality_matches if preferred_group.lower() in r.title.lower()]
         if group_matches:
             selected_result = group_matches[0]
 
-    playback_info = resolve_playback_url(
-        data={
-            "title": selected_result.title,
-            "mode": mode,
-            "indexer": selected_result.indexer,
-            "type": selected_result.type,
-            "debrid_type": selected_result.debridType,
-            "ids": ids,
-            "info_hash": selected_result.infoHash,
-            "url": selected_result.url,
-            "tv_data": tv_data,
-            "is_torrent": False,
-        },
-    )
+    description = _autoplay_description(selected_result, ids, mode)
+    if _is_stremio_source(selected_result):
+        try:
+            playback_info = _resolve_stremio_source(
+                selected_result,
+                {
+                    "description": description,
+                    "mode": mode,
+                    "ids": ids,
+                    "tv_data": tv_data,
+                    "is_torrent": False,
+                },
+            )
+        except StremioPlaybackError as error:
+            kodilog(
+                f"stremio_playback_error phase=auto_play code={error.code}",
+                xbmc.LOGWARNING,
+            )
+            notification(error.user_message)
+            return False
+    else:
+        playback_info = resolve_playback_url(
+            data={
+                "title": selected_result.title,
+                "description": description,
+                "mode": mode,
+                "indexer": selected_result.indexer,
+                "type": selected_result.type,
+                "debrid_type": selected_result.debridType,
+                "ids": ids,
+                "info_hash": selected_result.infoHash,
+                "url": selected_result.url,
+                "tv_data": tv_data,
+                "is_torrent": False,
+            },
+        )
 
     if not playback_info:
         return False
+
+    playback_info["autoplay"] = True
+    if autoplay_context:
+        playback_info["playnext_context"] = True
+        playback_info["direct_play"] = True
+    if playback_context:
+        playback_info.update(playback_context)
 
     player = JacktookPLayer()
     player.run(data=playback_info)
@@ -1144,9 +2056,7 @@ def add_task_if_enabled(
 ):
     """Add a search task to the task list if the corresponding setting is enabled."""
     if get_setting(setting_key):
-        tasks.append(
-            executor.submit(perform_search, indexer_key, dialog, *args, **kwargs)
-        )
+        tasks.append(executor.submit(perform_search, indexer_key, dialog, *args, **kwargs))
 
 
 def add_task_if_enabled_managed(
@@ -1155,6 +2065,4 @@ def add_task_if_enabled_managed(
     """Add a managed search task if the corresponding setting is enabled."""
     if get_setting(setting_key):
         name = str(indexer_key).title()
-        manager.submit_task(
-            name, indexer_key, perform_search, indexer_key, dialog, *args, **kwargs
-        )
+        manager.submit_task(name, indexer_key, perform_search, indexer_key, dialog, *args, **kwargs)

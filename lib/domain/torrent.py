@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -12,6 +12,7 @@ class TorrentStream:
     subindexer: str = ""
     addonKey: str = ""
     addonName: str = ""
+    addonSourceName: str = ""
     addonInstanceLabel: str = ""
     guid: str = ""
     infoHash: str = ""
@@ -32,6 +33,7 @@ class TorrentStream:
     # Quality and URLs
     quality: str = "N/A"
     url: str = ""
+    streamSubtitles: List[Dict[str, Any]] = field(default_factory=list)
 
     # Flags
     isPack: bool = False
@@ -41,3 +43,7 @@ class TorrentStream:
     # Codec & HDR
     codec: str = ""
     hdr: str = ""
+
+    # Optional Stremio metadata.  Keep this last so old positional callers and
+    # cached objects remain compatible.
+    stremioMetadata: Dict[str, Any] = field(default_factory=dict)

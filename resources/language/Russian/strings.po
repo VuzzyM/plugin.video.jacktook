@@ -267,6 +267,26 @@ msgctxt "#30257"
 msgid "Do you want to install Jacktook Burst?"
 msgstr "Вы хотите установить Jacktook Burst?"
 
+msgctxt "#30258"
+msgid "Invalid host for %s. Use http:// or https://"
+msgstr "Неверный хост для %s. Используйте http:// или https://"
+
+msgctxt "#30259"
+msgid "Test connection"
+msgstr "Проверить подключение"
+
+msgctxt "#30260"
+msgid "Jackgram: OK"
+msgstr "Jackgram: OK"
+
+msgctxt "#30261"
+msgid "Host not reachable"
+msgstr "Не удалось подключиться к хосту"
+
+msgctxt "#30262"
+msgid "Search in Telegram"
+msgstr "Поиск в Telegram"
+
 msgctxt "#30650"
 msgid "Queued"
 msgstr "В очереди"
@@ -431,6 +451,58 @@ msgctxt "#30939"
 msgid "Auto-resume from last position without asking"
 msgstr "Автоматически возобновлять с последней позиции без вопросов"
 
+msgctxt "#30940"
+msgid "Use Percentage Trigger"
+msgstr "Использовать срабатывание по проценту"
+
+msgctxt "#30941"
+msgid "Show Dialog at Playback Percentage"
+msgstr "Показывать диалог при проценте воспроизведения"
+
+msgctxt "#30942"
+msgid "Trigger the next-episode dialog based on percentage of video played instead of seconds remaining."
+msgstr "Показывать диалог следующего эпизода на основе процента просмотренного видео, а не оставшихся секунд."
+
+msgctxt "#30943"
+msgid "The percentage at which the next-episode dialog appears (e.g. 95 means 95% of the video)."
+msgstr "Процент, при котором появляется диалог следующего эпизода (например, 95 означает 95% видео)."
+
+msgctxt "#30944"
+msgid "Auto-Play Timeout"
+msgstr "Тайм-аут автовоспроизведения"
+
+msgctxt "#30945"
+msgid "Seconds before auto-playing next episode. 0 = disabled, dialog waits for user input."
+msgstr "Секунды до автоматического воспроизведения следующего эпизода. 0 = отключено, диалог ждёт ввода пользователя."
+
+
+msgctxt "#30946"
+msgid "Offcloud Configuration"
+msgstr "Настройка Offcloud"
+
+msgctxt "#30947"
+msgid "Enable Offcloud cached torrent and cloud transfer support."
+msgstr "Включить поддержку кэшированных торрентов и облачных загрузок Offcloud."
+
+msgctxt "#30948"
+msgid "Your Offcloud account username/email."
+msgstr "Ваше имя пользователя или email Offcloud."
+
+msgctxt "#30949"
+msgid "Offcloud API key from Account API Key settings."
+msgstr "API-ключ Offcloud из настроек аккаунта → API Key."
+
+msgctxt "#30950"
+msgid "View Offcloud account information."
+msgstr "Просмотреть информацию об аккаунте Offcloud."
+
+msgctxt "#30951"
+msgid "Authorize add-on to access Offcloud account."
+msgstr "Авторизовать дополнение для доступа к аккаунту Offcloud."
+
+msgctxt "#30952"
+msgid "Revoke Offcloud account access."
+msgstr "Отозвать доступ аккаунта Offcloud."
 msgctxt "#30728"
 msgid "Seeds"
 msgstr "Сиды"
@@ -458,6 +530,10 @@ msgstr "Настройка Torrentio"
 msgctxt "#30734"
 msgid "Enable"
 msgstr "Включить"
+
+msgctxt "#30735"
+msgid "Still Watching? Threshold"
+msgstr "Порог 'Ещё смотрите?'"
 
 msgctxt "#30736"
 msgid "Subtitle Language"
@@ -606,6 +682,10 @@ msgstr "Настройка Zilean"
 msgctxt "#30772"
 msgid "Zilean Host"
 msgstr "Хост Zilean"
+
+msgctxt "#30773"
+msgid "Number of consecutive auto-played episodes before asking 'Still Watching?'. Set to 0 to disable."
+msgstr "Количество подряд автоматически воспроизведённых эпизодов перед вопросом 'Ещё смотрите?'. Установите 0, чтобы отключить."
 
 msgctxt "#30774"
 msgid "Zilean Timeout"
@@ -1556,8 +1636,8 @@ msgid "TV Calendar"
 msgstr "ТВ-календарь"
 
 msgctxt "#90022"
-msgid "If you enjoy using Jacktook and want to support its development, you can buy me a coffee! Your support helps keep the project active and enables future improvements:"
-msgstr "Если вам нравится использовать Jacktook и вы хотите поддержать его разработку, вы можете угостить меня кофе! Ваша поддержка помогает проекту оставаться активным и позволяет вносить будущие улучшения:"
+msgid "Jacktook is free and built with care in spare time. If you enjoy the addon, consider supporting its development. Donations are optional and help keep updates coming."
+msgstr "Jacktook бесплатен и создается с заботой в свободное время. Если вам нравится addon, рассмотрите возможность поддержки его разработки. Пожертвования необязательны и помогают выпускать обновления."
 
 msgctxt "#90023"
 msgid "Support Jacktook"
@@ -1991,41 +2071,37 @@ msgctxt "#90144"
 msgid "Could not resolve playback URL"
 msgstr "Не удалось разрешить URL воспроизведения"
 
-msgctxt "#90145"
-msgid "Precaching Enabled"
-msgstr "Предкэширование включено"
-
 msgctxt "#90171"
 msgid "Autoscrape Next Episode"
-msgstr ""
+msgstr "Автопоиск следующего эпизода"
 
 msgctxt "#90172"
 msgid "Pre-resolve the next episode's playback URL in the background while watching."
-msgstr ""
+msgstr "Предварительно определять URL воспроизведения следующего эпизода в фоне во время просмотра."
 
 msgctxt "#90173"
 msgid "Autoscrape Threshold"
-msgstr ""
+msgstr "Порог автопоиска"
 
 msgctxt "#90174"
 msgid "Percentage of playback to trigger background pre-resolution."
-msgstr ""
+msgstr "Процент воспроизведения, при котором запускается фоновое предварительное определение."
 
 msgctxt "#90175"
 msgid "Autoscrape Episode Count"
-msgstr ""
+msgstr "Количество эпизодов для автопоиска"
 
 msgctxt "#90176"
 msgid "Number of upcoming episodes to pre-resolve."
-msgstr ""
+msgstr "Количество следующих эпизодов для предварительного определения."
 
 msgctxt "#90177"
 msgid "Autoscrape Cache TTL"
-msgstr ""
+msgstr "TTL кэша автопоиска"
 
 msgctxt "#90178"
 msgid "Hours to keep resolved playback data in cache."
-msgstr ""
+msgstr "Сколько часов хранить в кэше определённые данные воспроизведения."
 
 msgctxt "#30901"
 msgid "Show Only Stremio Catalogs"
@@ -2102,6 +2178,10 @@ msgstr "Фильтр по источнику"
 msgctxt "#32303"
 msgid "Filter by Language"
 msgstr "Фильтр по языку"
+
+msgctxt "#32307"
+msgid "Filter by Group"
+msgstr "Фильтр по группе релиза"
 
 msgctxt "#32304"
 msgid "Filter by Torrents"
@@ -3709,31 +3789,31 @@ msgstr "Сначала локализованный"
 
 msgctxt "#90755"
 msgid "Manage Sources"
-msgstr ""
+msgstr "Управление источниками"
 
 msgctxt "#90756"
 msgid "No sources available"
-msgstr ""
+msgstr "Нет доступных источников"
 
 msgctxt "#90179"
 msgid "Stinger Notifications"
-msgstr ""
+msgstr "Уведомления о сценах после титров"
 
 msgctxt "#90180"
 msgid "Show a notification when a movie has post-credit scenes."
-msgstr ""
+msgstr "Показывать уведомление, если в фильме есть сцены после титров."
 
 msgctxt "#90181"
 msgid "Stinger Notification Time"
-msgstr ""
+msgstr "Время уведомления о сцене после титров"
 
 msgctxt "#90182"
 msgid "Seconds before the end to show the stinger notification."
-msgstr ""
+msgstr "За сколько секунд до конца показать уведомление о сцене после титров."
 
 msgctxt "#90183"
 msgid "Stay tuned after the credits!"
-msgstr ""
+msgstr "Не выключайте после титров!"
 
 msgctxt "#90757"
 msgid "Image Resolution"
@@ -3768,36 +3848,36 @@ msgid "Get your API key at ratingposterdb.com"
 msgstr "Poluchite API-klyuch na ratingposterdb.com"
 
 msgctxt "#90765"
-msgid "Codec Filters"
-msgstr "Filtry kodeka"
+msgid "Filter by Codecs"
+msgstr "Фильтр по кодекам"
 
 msgctxt "#90766"
-msgid "HDR Filters"
-msgstr "Filtry HDR"
+msgid "Filter by HDR"
+msgstr "Фильтр по HDR"
 
 msgctxt "#90767"
-msgid "HEVC / H.265"
-msgstr "HEVC / H.265"
+msgid "Include HEVC / H.265"
+msgstr "Включать HEVC / H.265"
 
 msgctxt "#90768"
-msgid "AV1"
-msgstr "AV1"
+msgid "Include AV1"
+msgstr "Включать AV1"
 
 msgctxt "#90769"
-msgid "H.264"
-msgstr "H.264"
+msgid "Include H.264"
+msgstr "Включать H.264"
 
 msgctxt "#90770"
-msgid "Dolby Vision"
-msgstr "Dolby Vision"
+msgid "Include Dolby Vision"
+msgstr "Включать Dolby Vision"
 
 msgctxt "#90771"
-msgid "HDR10 / HDR10+"
-msgstr "HDR10 / HDR10+"
+msgid "Include HDR10 / HDR10+"
+msgstr "Включать HDR10 / HDR10+"
 
 msgctxt "#90772"
-msgid "HDR (generic)"
-msgstr "HDR (obshchiy)"
+msgid "Include HDR (generic)"
+msgstr "Включать HDR (общий)"
 
 msgctxt "#90774"
 msgid "Organize downloads by type"
@@ -3962,3 +4042,702 @@ msgstr "Vyberite yazyki dlya isklyucheniya"
 msgctxt "#90814"
 msgid "Choose original languages to hide from TMDB listings"
 msgstr "Vyberite original'nye yazyki dlya skrytiya iz spiskov TMDB"
+
+msgctxt "#90815"
+msgid "Support Jacktook"
+msgstr "Поддержать Jacktook"
+
+msgctxt "#90816"
+msgid "Support Jacktook development with an optional Ko-fi donation."
+msgstr "Поддержите разработку Jacktook необязательным пожертвованием на Ko-fi."
+
+msgctxt "#90817"
+msgid "Scan the QR code or open this link:"
+msgstr "Отсканируйте QR-код или откройте эту ссылку:"
+
+msgctxt "#90818"
+msgid "Jacktook was updated with new improvements. Donations are optional, but they help keep development active. Would you like to see the support link?"
+msgstr "Jacktook был обновлен с новыми улучшениями. Пожертвования необязательны, но помогают поддерживать разработку. Хотите увидеть ссылку поддержки?"
+
+msgctxt "#90300"
+msgid "External Scraper"
+msgstr "Magneto"
+
+msgctxt "#90301"
+msgid "Enable external scraper module integration."
+msgstr "Включить интеграцию внешнего модуля scraper."
+
+msgctxt "#90302"
+msgid "Choose External Scraper Module"
+msgstr "Выбрать внешний модуль scraper"
+
+msgctxt "#90303"
+msgid "Select an external scraper addon module to use for torrent search."
+msgstr "Выберите внешний модуль scraper addon для поиска торрентов."
+
+msgctxt "#90304"
+msgid "Choose External Scraper"
+msgstr "Выбрать внешний scraper"
+
+msgctxt "#90305"
+msgid "Selected Module"
+msgstr "Выбранный модуль"
+
+msgctxt "#90306"
+msgid "Open External Scraper Settings"
+msgstr "Открыть настройки внешнего scraper"
+
+msgctxt "#90307"
+msgid "Open the settings for the selected external scraper module."
+msgstr "Открыть настройки выбранного внешнего модуля scraper."
+
+msgctxt "#90382"
+msgid "Please set a valid Trakt Client ID Key"
+msgstr "Укажите действительный ключ Client ID Trakt"
+
+msgctxt "#90383"
+msgid "Please set a valid Trakt Client Secret Key"
+msgstr "Укажите действительный секретный ключ Client Secret Trakt"
+
+msgctxt "#90384"
+msgid "Trakt Error Authorizing"
+msgstr "Ошибка авторизации Trakt"
+
+msgctxt "#90385"
+msgid "Trakt Account Authorized"
+msgstr "Аккаунт Trakt авторизован"
+
+msgctxt "#90386"
+msgid "You are now logged out from Trakt.tv"
+msgstr "Вы вышли из Trakt.tv"
+
+msgctxt "#90387"
+msgid "Failed to mark as watched"
+msgstr "Не удалось отметить как просмотренное"
+
+msgctxt "#90388"
+msgid "Marked as watched"
+msgstr "Отмечено как просмотренное"
+
+msgctxt "#90389"
+msgid "No results found"
+msgstr "Результаты не найдены"
+
+msgctxt "#90390"
+msgid "Invalid mode"
+msgstr "Недопустимый режим"
+
+msgctxt "#90391"
+msgid "No recommendations found"
+msgstr "Рекомендации не найдены"
+
+msgctxt "#90392"
+msgid "No similar items found"
+msgstr "Похожие элементы не найдены"
+
+msgctxt "#90393"
+msgid "TMDB metadata not found"
+msgstr "Метаданные TMDB не найдены"
+
+msgctxt "#90394"
+msgid "No TV shows found"
+msgstr "Сериалы не найдены"
+
+msgctxt "#90395"
+msgid "No shows airing today"
+msgstr "Сегодня нет выходящих серий"
+
+msgctxt "#90396"
+msgid "Invalid collection query"
+msgstr "Недопустимый запрос коллекции"
+
+msgctxt "#90397"
+msgid "No keywords found"
+msgstr "Ключевые слова не найдены"
+
+msgctxt "#90398"
+msgid "No keyword ID provided"
+msgstr "ID ключевого слова не указан"
+
+msgctxt "#90399"
+msgid "No results found for this keyword"
+msgstr "Для этого ключевого слова результаты не найдены"
+
+msgctxt "#90400"
+msgid "No TMDB ID found"
+msgstr "ID TMDB не найден"
+
+msgctxt "#90401"
+msgid "Unsupported media type or missing external_ids"
+msgstr "Неподдерживаемый тип медиа или отсутствуют external_ids"
+
+msgctxt "#90402"
+msgid "Refreshed Metadata"
+msgstr "Метаданные обновлены"
+
+msgctxt "#90403"
+msgid "No Stremio addons selected"
+msgstr "Аддоны Stremio не выбраны"
+
+msgctxt "#90404"
+msgid "No suitable source found for auto play."
+msgstr "Подходящий источник для автовоспроизведения не найден."
+
+msgctxt "#90405"
+msgid "No sources found with the preferred quality."
+msgstr "Источники с предпочитаемым качеством не найдены."
+
+msgctxt "#90406"
+msgid "No languages found"
+msgstr "Языки не найдены"
+
+msgctxt "#90407"
+msgid "Failed to resolve playback source"
+msgstr "Не удалось определить источник воспроизведения"
+
+msgctxt "#90408"
+msgid "Trakt not authorized. Please authenticate."
+msgstr "Trakt не авторизован. Выполните аутентификацию."
+
+msgctxt "#90409"
+msgid "Added to Trakt Watchlist"
+msgstr "Добавлено в список просмотра Trakt"
+
+msgctxt "#90428"
+msgid "Database read error. File may be corrupted."
+msgstr "Ошибка чтения базы данных. Файл может быть повреждён."
+
+msgctxt "#90429"
+msgid "Failed to delete data. Database error."
+msgstr "Не удалось удалить данные. Ошибка базы данных."
+
+msgctxt "#90430"
+msgid "Failed to clear cache. Database in use."
+msgstr "Не удалось очистить кэш. База данных используется."
+
+msgctxt "#90458"
+msgid "OpenSubtitles Stremio: No results found."
+msgstr "OpenSubtitles Stremio: результаты не найдены."
+
+msgctxt "#90460"
+msgid "Subtitle Manager: No subtitles available for this video."
+msgstr "Менеджер субтитров: для этого видео субтитры недоступны."
+
+msgctxt "#90468"
+msgid "Search menu"
+msgstr "Меню поиска"
+
+msgctxt "#90469"
+msgid "Continue watching menu"
+msgstr "Меню продолжения просмотра"
+
+msgctxt "#90470"
+msgid "TV Shows Items"
+msgstr "Элементы сериалов"
+
+msgctxt "#90471"
+msgid "Movies Items"
+msgstr "Элементы фильмов"
+
+msgctxt "#90472"
+msgid "Anime menu"
+msgstr "Меню аниме"
+
+msgctxt "#90473"
+msgid "TV Menu"
+msgstr "Меню ТВ"
+
+msgctxt "#90474"
+msgid "Library menu"
+msgstr "Меню библиотеки"
+
+msgctxt "#90475"
+msgid "Torrents Management"
+msgstr "Управление торрентами"
+
+msgctxt "#90476"
+msgid "Telegram menu"
+msgstr "Меню Telegram"
+
+msgctxt "#90477"
+msgid "Cloud Storage"
+msgstr "Облачное хранилище"
+
+msgctxt "#90478"
+msgid "Downloads Management"
+msgstr "Управление загрузками"
+
+msgctxt "#90479"
+msgid "Settings Management"
+msgstr "Управление настройками"
+
+msgctxt "#90480"
+msgid "History Menu"
+msgstr "Меню истории"
+
+msgctxt "#90481"
+msgid "Files History"
+msgstr "История файлов"
+
+msgctxt "#90482"
+msgid "Titles History"
+msgstr "История названий"
+
+msgctxt "#90483"
+msgid "Titles Calendar"
+msgstr "Календарь названий"
+
+msgctxt "#90484"
+msgid "My Shows"
+msgstr "Мои сериалы"
+
+msgctxt "#90485"
+msgid "My Movies"
+msgstr "Мои фильмы"
+
+msgctxt "#90486"
+msgid "Upcoming Episodes"
+msgstr "Предстоящие эпизоды"
+
+msgctxt "#90487"
+msgid "Discovery List"
+msgstr "Список открытий"
+
+msgctxt "#90488"
+msgid "Library List"
+msgstr "Список библиотеки"
+
+msgctxt "#90489"
+msgid "Trakt Recommendations"
+msgstr "Рекомендации Trakt"
+
+msgctxt "#90490"
+msgid "Trending Lists"
+msgstr "Популярные сейчас списки"
+
+msgctxt "#90491"
+msgid "Popular Lists"
+msgstr "Популярные списки"
+
+msgctxt "#90492"
+msgid "Search Lists"
+msgstr "Поиск списков"
+
+msgctxt "#90493"
+msgid "Recent Activity"
+msgstr "Недавняя активность"
+
+msgctxt "#90494"
+msgid "Downloads List"
+msgstr "Список загрузок"
+
+msgctxt "#90495"
+msgid "Download New"
+msgstr "Новая загрузка"
+
+msgctxt "#90496"
+msgid "Cartoons Popular"
+msgstr "Популярные мультфильмы"
+
+msgctxt "#90497"
+msgid "Animation Popular"
+msgstr "Популярная анимация"
+
+msgctxt "#90500"
+msgid "Translating subtitle..."
+msgstr "Перевод субтитров..."
+
+msgctxt "#90501"
+msgid "Translation done."
+msgstr "Перевод завершён."
+
+msgctxt "#90502"
+msgid "Searching subtitles..."
+msgstr "Поиск субтитров..."
+
+msgctxt "#90503"
+msgid "No subtitles found"
+msgstr "Субтитры не найдены"
+
+msgctxt "#90504"
+msgid "Failed to authenticate with DeepL. Please check your API key."
+msgstr "Не удалось пройти аутентификацию в DeepL. Проверьте ключ API."
+
+msgctxt "#90505"
+msgid "DeepL API key is missing or invalid."
+msgstr "Ключ API DeepL отсутствует или недействителен."
+
+msgctxt "#90712"
+msgid "Views"
+msgstr "Виды"
+
+msgctxt "#90713"
+msgid "Set Main View"
+msgstr "Задать основной вид"
+
+msgctxt "#90714"
+msgid "Set Movies View"
+msgstr "Задать вид фильмов"
+
+msgctxt "#90715"
+msgid "Set TV Shows View"
+msgstr "Задать вид сериалов"
+
+msgctxt "#90716"
+msgid "Set Seasons View"
+msgstr "Задать вид сезонов"
+
+msgctxt "#90717"
+msgid "Set Episodes View"
+msgstr "Задать вид эпизодов"
+
+msgctxt "#90718"
+msgid "Set Library View"
+msgstr "Задать вид библиотеки"
+
+msgctxt "#90719"
+msgid "Set History View"
+msgstr "Задать вид истории"
+
+msgctxt "#90720"
+msgid "Set Downloads View"
+msgstr "Задать вид загрузок"
+
+msgctxt "#90721"
+msgid "Save Current View"
+msgstr "Сохранить текущий вид"
+
+msgctxt "#90722"
+msgid "View saved"
+msgstr "Вид сохранён"
+
+msgctxt "#90723"
+msgid "Could not detect the current view"
+msgstr "Не удалось определить текущий вид"
+
+msgctxt "#90724"
+msgid "Saved views reset"
+msgstr "Сохранённые виды сброшены"
+
+msgctxt "#90725"
+msgid "Reset Saved Views"
+msgstr "Сбросить сохранённые виды"
+
+msgctxt "#90726"
+msgid "Open this screen, change the Kodi view manually, then select Save Current View."
+msgstr "Откройте этот экран, вручную измените вид Kodi, затем выберите Сохранить текущий вид."
+
+msgctxt "#90730"
+msgid "Search with title + year"
+msgstr "Искать по названию + году"
+
+msgctxt "#90731"
+msgid "Search with original title"
+msgstr "Искать по оригинальному названию"
+
+msgctxt "#90732"
+msgid "Search with original title + year"
+msgstr "Искать по оригинальному названию + году"
+
+msgctxt "#90733"
+msgid "Search modes"
+msgstr "Режимы поиска"
+
+msgctxt "#90734"
+msgid "Enter year"
+msgstr "Введите год"
+
+msgctxt "#90735"
+msgid "Invalid year"
+msgstr "Недопустимый год"
+
+msgctxt "#90736"
+msgid "Edit title"
+msgstr "Редактировать название"
+
+msgctxt "#90737"
+msgid "Invalid season"
+msgstr "Недопустимый сезон"
+
+msgctxt "#90738"
+msgid "Episode"
+msgstr "Эпизод"
+
+msgctxt "#90739"
+msgid "Invalid episode"
+msgstr "Недопустимый эпизод"
+
+msgctxt "#90819"
+msgid "Rename Stremio add-on"
+msgstr "Переименовать дополнение Stremio"
+
+msgctxt "#90824"
+msgid "Rename Stremio catalog"
+msgstr "Переименовать каталог Stremio"
+
+msgctxt "#90827"
+msgid "Set a Kodi-only display alias for a Stremio add-on."
+msgstr "Задать отображаемый псевдоним только в Kodi для дополнения Stremio."
+
+msgctxt "#90828"
+msgid "Set a Kodi-only display alias for a Stremio catalog."
+msgstr "Задать отображаемый псевдоним только в Kodi для каталога Stremio."
+
+msgctxt "#90832"
+msgid "Stremio: Addons Management"
+msgstr "Stremio: Управление дополнениями"
+
+msgctxt "#90833"
+msgid "Stremio: Catalogs & Visibility"
+msgstr "Stremio: Каталоги и видимость"
+
+msgctxt "#90834"
+msgid "Stremio: Rename & Customization"
+msgstr "Stremio: Переименование и настройка"
+
+msgctxt "#90835"
+msgid "Stremio: Search & Behavior"
+msgstr "Stremio: Поиск и поведение"
+msgctxt "#30956"
+msgid "Use integrated OpenSubtitles"
+msgstr ""
+
+msgctxt "#30957"
+msgid "Queries the integrated OpenSubtitles service with the current video ID and, when available, filename, size, and video hash. Disable this to prevent those requests."
+msgstr ""
+
+msgctxt "#90962"
+msgid "MDbList"
+msgstr "MDbList"
+
+msgctxt "#90964"
+msgid "The installed version is newer than the version published in the repository."
+msgstr "Установленная версия новее версии, опубликованной в репозитории."
+
+msgctxt "#90999"
+msgid "Clear Continue Watching"
+msgstr "Очистить «Продолжить просмотр»"
+
+msgctxt "#91001"
+msgid "Continue Watching cleared"
+msgstr "«Продолжить просмотр» очищен"
+
+msgctxt "#91002"
+msgid "Nuvio: Account"
+msgstr "Nuvio: Аккаунт"
+
+msgctxt "#91003"
+msgid "Enable"
+msgstr "Включить"
+
+msgctxt "#91005"
+msgid "Connect Nuvio with QR Code"
+msgstr "Подключить Nuvio с помощью QR-кода"
+
+msgctxt "#91004"
+msgid "Push your Jacktook movie and TV episode watch progress to Nuvio when playback stops."
+msgstr "Отправлять в Nuvio прогресс просмотра фильмов и эпизодов сериалов из Jacktook при остановке воспроизведения."
+
+msgctxt "#91006"
+msgid "Scan the QR code with a signed-in Nuvio device, then select the profile that receives watch-progress updates."
+msgstr "Отсканируйте QR-код на устройстве с выполненным входом в Nuvio, затем выберите профиль для обновлений прогресса просмотра."
+
+msgctxt "#91007"
+msgid "Sign Out of Nuvio"
+msgstr "Выйти из Nuvio"
+
+msgctxt "#91008"
+msgid "Remove the saved Nuvio session and selected profile from Jacktook."
+msgstr "Удалить из Jacktook сохранённый сеанс Nuvio и выбранный профиль."
+
+msgctxt "#91009"
+msgid "Nuvio connection cancelled."
+msgstr "Подключение к Nuvio отменено."
+
+msgctxt "#91010"
+msgid "Nuvio authorization expired. Start the QR connection again."
+msgstr "Срок авторизации Nuvio истёк. Запустите подключение по QR-коду снова."
+
+msgctxt "#91011"
+msgid "Nuvio authorization was already used or cancelled. Start the QR connection again."
+msgstr "Авторизация Nuvio уже использована или отменена. Запустите подключение по QR-коду снова."
+
+msgctxt "#91012"
+msgid "Nuvio could not start QR authorization. Please try again."
+msgstr "Не удалось запустить авторизацию Nuvio по QR-коду. Повторите попытку."
+
+msgctxt "#91013"
+msgid "Nuvio authorization check failed. Please try again."
+msgstr "Не удалось проверить авторизацию Nuvio. Повторите попытку."
+
+msgctxt "#91014"
+msgid "Nuvio authorization exchange failed. Please try again."
+msgstr "Не удалось завершить обмен авторизации Nuvio. Повторите попытку."
+
+msgctxt "#91015"
+msgid "Unable to load Nuvio profiles. Please try again."
+msgstr "Не удалось загрузить профили Nuvio. Повторите попытку."
+
+msgctxt "#91016"
+msgid "Nuvio watch-progress sync connected."
+msgstr "Синхронизация прогресса просмотра Nuvio подключена."
+
+msgctxt "#91017"
+msgid "Choose Nuvio profile"
+msgstr "Выберите профиль Nuvio"
+
+msgctxt "#91018"
+msgid "Nuvio: Addons Management"
+msgstr "Nuvio: Управление дополнениями"
+
+msgctxt "#91019"
+msgid "Select Nuvio Addons"
+msgstr "Выбрать дополнения Nuvio"
+
+msgctxt "#91020"
+msgid "Select the enabled Nuvio addons to use for stream searches."
+msgstr "Выберите включенные дополнения Nuvio для поиска потоков."
+
+msgctxt "#91021"
+msgid "No usable Nuvio addons are available."
+msgstr "Нет доступных совместимых дополнений Nuvio."
+
+msgctxt "#91022"
+msgid "Nuvio addons could not be loaded. Your saved selection was not changed."
+msgstr "Не удалось загрузить дополнения Nuvio. Сохраненный выбор не изменен."
+
+msgctxt "#91023"
+msgid "Nuvio: Watch Progress"
+msgstr "Nuvio: Прогресс просмотра"
+
+msgctxt "#91024"
+msgid "Nuvio: Watch History"
+msgstr "Nuvio: История просмотра"
+
+msgctxt "#91025"
+msgid "No Nuvio watch progress available."
+msgstr "Прогресс просмотра Nuvio недоступен."
+
+msgctxt "#91026"
+msgid "No Nuvio watch history available."
+msgstr "История просмотра Nuvio недоступна."
+
+msgctxt "#91027"
+msgid "Remove from Nuvio"
+msgstr "Удалить из Nuvio"
+
+msgctxt "#91028"
+msgid "Removed from Nuvio Continue Watching"
+msgstr "Удалено из «Продолжить просмотр Nuvio»"
+
+msgctxt "#91029"
+msgid "Could not remove Nuvio watch progress."
+msgstr "Не удалось удалить прогресс просмотра Nuvio."
+
+msgctxt "#91030"
+msgid "О программе"
+msgstr "О программе"
+
+msgctxt "#91031"
+msgid "Version"
+msgstr "Версия"
+
+msgctxt "#91032"
+msgid "My Nuvio Movies"
+msgstr "Мои фильмы Nuvio"
+
+msgctxt "#91033"
+msgid "My Nuvio Shows"
+msgstr "Мои сериалы Nuvio"
+
+msgctxt "#91034"
+msgid "No Nuvio library items available."
+msgstr "Нет доступных элементов библиотеки Nuvio."
+
+msgctxt "#91035"
+msgid "Nuvio: Library Sync"
+msgstr "Nuvio: Синхронизация библиотеки"
+
+msgctxt "#91036"
+msgid "Sync interval (minutes)"
+msgstr "Интервал синхронизации (минуты)"
+
+msgctxt "#91037"
+msgid "How often Nuvio library changes are pulled, in minutes (minimum 1)."
+msgstr "Как часто загружаются изменения библиотеки Nuvio, в минутах (минимум 1)."
+
+msgctxt "#91038"
+msgid "Nuvio"
+msgstr "Nuvio"
+
+msgctxt "#91039"
+msgid "Add to Nuvio Library"
+msgstr "Добавить в библиотеку Nuvio"
+
+msgctxt "#91040"
+msgid "Remove from Nuvio Library"
+msgstr "Удалить из библиотеки Nuvio"
+
+msgctxt "#91041"
+msgid "Added to Nuvio Library"
+msgstr "Добавлено в библиотеку Nuvio"
+
+msgctxt "#91042"
+msgid "Removed from Nuvio Library"
+msgstr "Удалено из библиотеки Nuvio"
+
+msgctxt "#91043"
+msgid "Could not update the Nuvio library."
+msgstr "Не удалось обновить библиотеку Nuvio."
+
+msgctxt "#91044"
+msgid "Mark as Watched on Nuvio"
+msgstr "Отметить как просмотренное в Nuvio"
+
+msgctxt "#91045"
+msgid "Mark as Unwatched on Nuvio"
+msgstr "Отметить как непросмотренное в Nuvio"
+
+msgctxt "#91046"
+msgid "Marked as watched on Nuvio."
+msgstr "Отмечено как просмотренное в Nuvio."
+
+msgctxt "#91047"
+msgid "Removed from Nuvio history."
+msgstr "Удалено из истории Nuvio."
+
+msgctxt "#91048"
+msgid "Could not update Nuvio history."
+msgstr "Не удалось обновить историю Nuvio."
+
+msgctxt "#91049"
+msgid "Remove from Nuvio History?"
+msgstr "Удалить из истории Nuvio?"
+
+msgctxt "#91050"
+msgid "This removes the item from your Nuvio watch history. Continue?"
+msgstr "Это удалит элемент из истории просмотров Nuvio. Продолжить?"
+
+msgctxt "#91051"
+msgid "Коллекции"
+msgstr "Коллекции"
+
+msgctxt "#91052"
+msgid "Коллекции Nuvio недоступны."
+msgstr "Коллекции Nuvio недоступны."
+
+msgctxt "#91053"
+msgid "Дополнение не установлено"
+msgstr "Дополнение не установлено"
+
+msgctxt "#91054"
+msgid "Дополнение этого каталога не установлено в Nuvio."
+msgstr "Дополнение этого каталога не установлено в Nuvio."
+
+msgctxt "#91055"
+msgid "Этот источник коллекции пока не поддерживается."
+msgstr "Этот источник коллекции пока не поддерживается."
+
+msgctxt "#91056"
+msgid "Результаты не найдены."
+msgstr "Результаты не найдены."

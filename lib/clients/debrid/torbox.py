@@ -1,8 +1,10 @@
 import copy
-from typing import Dict, List, Any, Optional
+import time
+from typing import Any, Dict, List, Optional
+
 from lib.api.debrid.torbox import Torbox
 from lib.clients.debrid.common import get_file_name, get_packed_release_message
-from lib.utils.kodi.utils import get_setting, notification, dialog_text, kodilog, translation
+from lib.domain.torrent import TorrentStream
 from lib.utils.general.utils import (
     DebridType,
     IndexerType,
@@ -13,7 +15,13 @@ from lib.utils.general.utils import (
     set_cached,
     supported_video_extensions,
 )
-from lib.domain.torrent import TorrentStream
+from lib.utils.kodi.utils import (
+    dialog_text,
+    get_setting,
+    kodilog,
+    notification,
+    translation,
+)
 
 EXTENSIONS = supported_video_extensions()[:-1]
 
@@ -42,9 +50,7 @@ class TorboxHelper:
 
         if hashes:
             kodilog(
-                "TorboxHelper.check_cached: checking {} hashes against TorBox cache".format(
-                    len(hashes)
-                )
+                f"TorboxHelper.check_cached: checking {len(hashes)} hashes against TorBox cache"
             )
             response = self.client.get_torrent_instant_availability(hashes)
             raw_data = response.get("data", [])
@@ -58,9 +64,7 @@ class TorboxHelper:
         missing_hashes = len(results) - len(hashes)
         if missing_hashes:
             kodilog(
-                "TorboxHelper.check_cached: skipping {} results without info_hash".format(
-                    missing_hashes
-                )
+                f"TorboxHelper.check_cached: skipping {missing_hashes} results without info_hash"
             )
 
         for res in copy.deepcopy(results):
@@ -78,9 +82,7 @@ class TorboxHelper:
 
     def add_torbox_torrent(self, info_hash):
         kodilog(
-            "TorboxHelper.add_torbox_torrent: checking existing torrent for hash={!r}".format(
-                str(info_hash).lower()[:12]
-            )
+            f"TorboxHelper.add_torbox_torrent: checking existing torrent for hash={str(info_hash).lower()[:12]!r}"
         )
         torrent_info = self.client.get_available_torrent(info_hash)
         if (
@@ -99,8 +101,10 @@ class TorboxHelper:
 
         if "Found Cached" in response.get("detail", ""):
             return self.client.get_available_torrent(info_hash)
-        
-        kodilog(f"TorboxHelper: Magnet added successfully, waiting for download. Detail: {response.get('detail', 'N/A')}")
+
+        kodilog(
+            f"TorboxHelper: Magnet added successfully, waiting for download. Detail: {response.get('detail', 'N/A')}"
+        )
         return response
 
     def add_torrent_file(self, torrent_data: bytes, torrent_name: str = "torrent.torrent"):
@@ -164,13 +168,7 @@ class TorboxHelper:
             )
 
         kodilog(
-            "Torbox cloud listing: total={}, playable={}, skipped_not_dict={}, skipped_not_present={}, skipped_no_playable={}".format(
-                len(torrents),
-                len(downloads),
-                skipped_not_dict,
-                skipped_not_present,
-                skipped_no_playable,
-            )
+            f"Torbox cloud listing: total={len(torrents)}, playable={len(downloads)}, skipped_not_dict={skipped_not_dict}, skipped_not_present={skipped_not_present}, skipped_no_playable={skipped_no_playable}"
         )
 
         return downloads
@@ -180,16 +178,12 @@ class TorboxHelper:
         file_id = data.get("file_id", "")
 
         if torrent_id and file_id:
-            response_data = self.client.create_download_link(
-                torrent_id, file_id, get_public_ip()
-            )
+            response_data = self.client.create_download_link(torrent_id, file_id, get_public_ip())
             if response_data:
                 data["url"] = response_data.get("data", {})
                 return data
             kodilog(
-                "Torbox cloud playback failed to create link for torrent_id={!r}, file_id={!r}".format(
-                    torrent_id, file_id
-                )
+                f"Torbox cloud playback failed to create link for torrent_id={torrent_id!r}, file_id={file_id!r}"
             )
             return None
 
@@ -197,9 +191,30 @@ class TorboxHelper:
         if not torrent_info:
             return None
 
+        torrent_files = torrent_info.get("files", []) or []
+        if not torrent_files and info_hash:
+            kodilog(
+                f"TorboxHelper.get_link: torrent has no files yet, retrying metadata fetch for hash={str(info_hash).lower()[:12]!r}"
+            )
+            for _ in range(3):
+                time.sleep(1)
+                refreshed_info = self.client.get_available_torrent(info_hash)
+                if refreshed_info:
+                    torrent_info = refreshed_info
+                    torrent_files = refreshed_info.get("files", []) or []
+                    if torrent_files:
+                        break
+
+        if not torrent_files:
+            kodilog(
+                f"TorboxHelper.get_link: no playable files available yet for hash={str(info_hash).lower()[:12]!r}"
+            )
+            notification("Torbox is still processing this torrent. Please try again in a moment.")
+            return None
+
         video_files = [
             item
-            for item in torrent_info["files"]
+            for item in torrent_files
             if any(get_file_name(item).lower().endswith(ext) for ext in EXTENSIONS)
         ]
         if not video_files:
@@ -263,16 +278,11 @@ class TorboxHelper:
         user = response.get("data", {})
         customer_email = user.get("customer_email", "")
         plan = user.get("plan", 0)
-        
+
         # Plan mapping (based on general knowledge of Torbox plans, might need adjustment)
-        plans = {
-            0: "Free",
-            1: "Essential",
-            2: "Pro",
-            3: "Standard"
-        }
+        plans = {0: "Free", 1: "Essential", 2: "Pro", 3: "Standard"}
         plan_name = plans.get(plan, f"Plan {plan}")
-        
+
         body = [
             f"[B]Account:[/B] {customer_email}",
             f"[B]Plan:[/B] {plan_name}",
@@ -282,5 +292,5 @@ class TorboxHelper:
 
         days = self.client.days_remaining()
         if days is not None:
-             body.append(f"[B]Days Remaining:[/B] {days}")
+            body.append(f"[B]Days Remaining:[/B] {days}")
         dialog_text(translation(90656), "\n".join(body))

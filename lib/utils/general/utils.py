@@ -1,38 +1,45 @@
+import contextlib
+import hashlib
+import json
 import os
 import re
-import hashlib
 import unicodedata
-import json
-from email.utils import parsedate_to_datetime
-from enum import Enum
-from urllib.parse import unquote
-import requests
-from typing import Dict, List
-from zipfile import ZipFile
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional
+from urllib.parse import unquote
+from zipfile import ZipFile
+
+import requests
+import xbmc
+from xbmc import getSupportedMedia
+from xbmcgui import Dialog, DialogProgressBG
+from xbmcplugin import addDirectoryItem, setContent, setPluginCategory
 
 from lib.api.fanart.fanart import get_fanart
 from lib.api.tmdbv3api.tmdb import TMDb
-from lib.clients.subtitle.utils import get_language_code
-from lib.gui.qr_progress_dialog import QRProgressDialog
-from lib.api.trakt.trakt_cache import trakt_watched_cache, trakt_cache
 from lib.api.trakt.lists_cache import lists_cache
 from lib.api.trakt.main_cache import main_cache
-from lib.utils.debrid.qrcode_utils import make_qrcode
-from lib.utils.general.processors import PostProcessBuilder, PreProcessBuilder
-from lib.clients.base import TorrentStream
+from lib.api.trakt.trakt_cache import trakt_cache, trakt_watched_cache
 from lib.api.tvdbapi.tvdbapi import TVDBAPI
-from lib.db.cached import cache
+from lib.clients.base import TorrentStream
 from lib.clients.stremio.constants import (
-    STREMIO_ADDONS_KEY,
     STREMIO_ADDONS_CATALOGS_KEY,
+    STREMIO_ADDONS_KEY,
     STREMIO_TV_ADDONS_KEY,
     STREMIO_USER_ADDONS,
 )
+from lib.clients.subtitle.utils import get_language_code
+from lib.db.cached import cache
 from lib.db.pickle_db import PickleDatabase
+from lib.gui.qr_progress_dialog import QRProgressDialog
+from lib.utils.debrid.qrcode_utils import make_qrcode
+from lib.utils.general.processors import PostProcessBuilder, PreProcessBuilder
+from lib.utils.kodi.settings import get_cache_expiration, is_cache_enabled
 from lib.utils.kodi.utils import (
-    ADDON_HANDLE,
     ADDON_PATH,
     EPISODES_TYPE,
     MOVIES_TYPE,
@@ -43,6 +50,7 @@ from lib.utils.kodi.utils import (
     container_refresh,
     copy2clip,
     dialog_text,
+    get_addon_handle,
     get_jacktorr_setting,
     get_setting,
     get_setting_fresh,
@@ -53,18 +61,7 @@ from lib.utils.kodi.utils import (
     translatePath,
     translation,
 )
-
-from lib.utils.kodi.settings import get_cache_expiration, is_cache_enabled
 from lib.vendor.torf._magnet import Magnet
-
-from collections import deque
-
-from xbmcgui import Dialog
-from xbmcgui import DialogProgressBG
-from xbmcplugin import addDirectoryItem, setContent, setPluginCategory
-from xbmc import getSupportedMedia
-import xbmc
-
 
 pickle_db = PickleDatabase()
 
@@ -78,11 +75,38 @@ USER_AGENT_HEADER = {
 
 USER_AGENT_STRING = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
+# TMDB documents still_sizes as w92/w185/w300/original only; undocumented widths
+# (e.g. w500) are website-internal, can stop working at any time, and only
+# "original" delivers real still quality.
 TMDB_IMAGE_SIZES = {
-    "low": {"poster": "w185", "thumb": "w185", "profile": "w185", "fanart": "w300"},
-    "medium": {"poster": "w342", "thumb": "w342", "profile": "w342", "fanart": "w780"},
-    "high": {"poster": "w780", "thumb": "w780", "profile": "w780", "fanart": "w1280"},
-    "original": {"poster": "original", "thumb": "original", "profile": "original", "fanart": "original"},
+    "low": {
+        "poster": "w185",
+        "thumb": "w185",
+        "profile": "w185",
+        "fanart": "w300",
+        "still": "w185",
+    },
+    "medium": {
+        "poster": "w342",
+        "thumb": "w342",
+        "profile": "w342",
+        "fanart": "w780",
+        "still": "w300",
+    },
+    "high": {
+        "poster": "w780",
+        "thumb": "w780",
+        "profile": "w780",
+        "fanart": "w1280",
+        "still": "original",
+    },
+    "original": {
+        "poster": "original",
+        "thumb": "original",
+        "profile": "original",
+        "fanart": "original",
+        "still": "original",
+    },
 }
 
 
@@ -202,6 +226,7 @@ class DebridType(Enum):
     RD = "RealDebrid"
     PM = "Premiumize"
     TB = "Torbox"
+    OC = "Offcloud"
     ED = "EasyDebrid"
     DB = "Debrider"
     AD = "AllDebrid"
@@ -227,6 +252,7 @@ class Indexer(Enum):
     BURST = "Burst"
     ZILEAN = "Zilean"
     EASYNEWS = "Easynews"
+    EXTERNAL_SCRAPER = "External Scraper"
 
 
 class SearchVariant(Enum):
@@ -281,6 +307,7 @@ torrent_indexers = [
     Indexer.PEERFLIX,
     Indexer.ELHOSTED,
     Indexer.BURST,
+    Indexer.EXTERNAL_SCRAPER,
 ]
 
 
@@ -304,10 +331,8 @@ class DialogListener:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        try:
+        with contextlib.suppress(BaseException):
             self._dialog.close()
-        except:
-            pass
 
 
 def is_debrid_activated():
@@ -315,6 +340,7 @@ def is_debrid_activated():
         get_setting_fresh("real_debrid_enabled")
         or get_setting_fresh("premiumize_enabled")
         or get_setting_fresh("torbox_enabled")
+        or get_setting_fresh("offcloud_enabled")
         or get_setting_fresh("debrider_enabled")
         or get_setting_fresh("alldebrid_enabled")
     )
@@ -327,6 +353,8 @@ def check_debrid_enabled(debrid_type):
         return is_pm_enabled()
     elif debrid_type == DebridType.TB:
         return is_tb_enabled()
+    elif debrid_type == DebridType.OC:
+        return is_oc_enabled()
     elif debrid_type == DebridType.DB:
         return is_debrider_enabled()
     elif debrid_type == DebridType.AD:
@@ -353,6 +381,10 @@ def is_debrider_enabled():
 
 def is_tb_enabled():
     return get_setting_fresh("torbox_enabled")
+
+
+def is_oc_enabled():
+    return get_setting_fresh("offcloud_enabled")
 
 
 def is_ed_enabled():
@@ -394,7 +426,9 @@ def make_listing(data):
     return list_item
 
 
-def set_media_infoTag(list_item, data, fanart_data={}, mode="video", detailed=False):
+def set_media_infoTag(list_item, data, fanart_data=None, mode="video", detailed=False):
+    if fanart_data is None:
+        fanart_data = {}
     mode = "movies" if mode in ("movie", "movies") else mode
     info_tag = list_item.getVideoInfoTag()
 
@@ -404,12 +438,21 @@ def set_media_infoTag(list_item, data, fanart_data={}, mode="video", detailed=Fa
     _set_artwork(list_item, data, fanart_data)
     _set_released_info(info_tag, data)
     _set_trakt_ui_state(list_item, info_tag, data, mode)
+    _set_simkl_indicator_identity(list_item, data, mode)
 
     if mode == "tv" or mode == "season" or mode == "episode":
         _set_show_info(info_tag, data, mode)
 
     if detailed:
         _set_detailed_info(info_tag, data, mode)
+
+
+def _set_simkl_indicator_identity(list_item, data, mode):
+    tmdb_id = data.get("id")
+    if not tmdb_id or mode not in ("movies", "tv"):
+        return
+    list_item.setProperty("jacktook.simkl.tmdb_id", str(tmdb_id))
+    list_item.setProperty("jacktook.simkl.media_type", "movie" if mode == "movies" else "show")
 
 
 def _set_basic_info(info_tag, data):
@@ -576,9 +619,7 @@ def _set_trakt_ui_state(list_item, info_tag, data, mode):
     if not tmdb_id or season is None or episode is None:
         return
 
-    is_watched = trakt_watched_cache.get_watched_status(
-        "episode", tmdb_id, season, episode
-    )
+    is_watched = trakt_watched_cache.get_watched_status("episode", tmdb_id, season, episode)
     if is_watched:
         info_tag.setPlaycount(1)
         return
@@ -592,8 +633,7 @@ def _set_show_info(info_tag, data, mode):
         seasons = list(data["seasons"])
         if isinstance(seasons, list):
             named_seasons = [
-                (season.get("season_number", 0), season.get("name", ""))
-                for season in seasons
+                (season.get("season_number", 0), season.get("name", "")) for season in seasons
             ]
             info_tag.addSeasons(named_seasons)
         else:
@@ -718,18 +758,21 @@ def build_actor(member, is_cast=True):
 
 
 def set_listitem_artwork(list_item, data, fanart_data):
+    tier_map = {"0": "low", "1": "medium", "2": "high", "3": "original"}
+    tier = tier_map.get(get_setting_fresh("image_resolution_tier", "2"), "high")
+    image_sizes = TMDB_IMAGE_SIZES.get(tier, {})
     thumb_sources = [
-        (data.get("poster_path"), get_image_size("thumb")),
-        (data.get("still_path"), get_image_size("thumb")),
+        (data.get("poster_path"), image_sizes.get("thumb", "")),
+        (data.get("still_path"), image_sizes.get("still", "")),
     ]
     poster_sources = [
-        (data.get("poster_path"), get_image_size("poster")),
-        (data.get("still_path"), get_image_size("poster")),
-        (data.get("profile_path"), get_image_size("profile")),
+        (data.get("poster_path"), image_sizes.get("poster", "")),
+        (data.get("profile_path"), image_sizes.get("profile", "")),
+        (data.get("still_path"), image_sizes.get("still", "")),
     ]
     fanart_sources = [
-        (data.get("backdrop_path"), get_image_size("fanart")),
-        (data.get("still_path"), get_image_size("fanart")),
+        (data.get("backdrop_path"), image_sizes.get("fanart", "")),
+        (data.get("still_path"), image_sizes.get("still", "")),
     ]
 
     clear_logo = [(extract_tmdb_logo_url(data), "original")]
@@ -748,7 +791,7 @@ def set_listitem_artwork(list_item, data, fanart_data):
             "thumb": first_valid(thumb_sources),
             "poster": first_valid(poster_sources, "poster"),
             "fanart": first_valid(fanart_sources, "fanart"),
-            "icon": first_valid(poster_sources),
+            "icon": first_valid(poster_sources) or first_valid(thumb_sources),
             "banner": first_valid(fanart_sources, "banner"),
             "clearart": first_valid(fanart_sources, "clearart"),
             "clearlogo": first_valid(clear_logo, "clearlogo"),
@@ -770,7 +813,7 @@ def extract_tmdb_logo_url(data):
 
 
 def tmdb_url(path, size):
-    return f"http://image.tmdb.org/t/p/{size}{path}" if path else ""
+    return f"https://image.tmdb.org/t/p/{size}{path}" if path else ""
 
 
 def get_rpdb_poster(imdb_id, api_key):
@@ -831,9 +874,7 @@ def build_media_metadata(ids, mode: str) -> dict:
         if mode == "movies" and getattr(res, "movie_results", []):
             tmdb_id = str(res.movie_results[0]["id"])
             ids["tmdb_id"] = tmdb_id
-        elif mode in ("tv", "episode", "season", "anime") and getattr(
-            res, "tv_results", []
-        ):
+        elif mode in ("tv", "episode", "season", "anime") and getattr(res, "tv_results", []):
             tmdb_id = str(res.tv_results[0]["id"])
             ids["tmdb_id"] = tmdb_id
 
@@ -896,6 +937,9 @@ def build_media_metadata(ids, mode: str) -> dict:
 
 def set_watched_file(data):
     title = data.get("title", "")
+    if isinstance(title, str):
+        title = unquote(title)
+        data["title"] = title
     is_torrent = data.get("is_torrent", False)
     is_direct = data.get("type", "") == IndexerType.DIRECT
     is_stremio = data.get("type", "") == IndexerType.STREMIO_DEBRID
@@ -916,6 +960,11 @@ def set_watched_file(data):
     data["timestamp"] = datetime.now().strftime("%a, %d %b %Y %I:%M %p")
 
     pickle_db.set_item(key="jt:lfh", subkey=title, value=data)
+
+
+def clear_continue_watching_history():
+    """Clear all Continue Watching entries from the shared database."""
+    pickle_db.set_key("jt:lfh", {})
 
 
 def set_watched_title(title, ids, mode, tg_data="", media_type="", library_data=None):
@@ -963,9 +1012,7 @@ def is_in_library(title):
 
 
 def get_fanart_details(tvdb_id="", tmdb_id="", mode="tv"):
-    identifier = "{}|{}".format(
-        "fanart.tv", tvdb_id if tvdb_id and tvdb_id != "None" else tmdb_id
-    )
+    identifier = "{}|{}".format("fanart.tv", tvdb_id if tvdb_id and tvdb_id != "None" else tmdb_id)
     cached = cache.get(identifier)
     if cached:
         return cached
@@ -990,26 +1037,30 @@ def get_fanart_details(tvdb_id="", tmdb_id="", mode="tv"):
     return data or {}
 
 
-def get_cached_results(query, mode, media_type, episode, cache_scope=""):
+def get_cached_results(query, mode, media_type, episode, season, cache_scope=""):
     if mode == "tv" or media_type == "tv" or mode == "anime":
-        return get_cached(query, params=(episode, "index", cache_scope))
+        return get_cached(query, params=(season, episode, "index", cache_scope))
     return get_cached(query, params=("index", cache_scope))
 
 
-def cache_results(results, query, mode, media_type, episode, cache_scope=""):
+def cache_results(results, query, mode, media_type, episode, season, cache_scope=""):
     if mode == "tv" or media_type == "tv" or mode == "anime":
-        set_cached(results, query, params=(episode, "index", cache_scope))
+        set_cached(results, query, params=(season, episode, "index", cache_scope))
     else:
         set_cached(results, query, params=("index", cache_scope))
 
 
-def get_cached(path, params={}):
-    identifier = "{}|{}".format(path, params)
+def get_cached(path, params=None):
+    if params is None:
+        params = {}
+    identifier = f"{path}|{params}"
     return cache.get(identifier)
 
 
-def set_cached(data, path, params={}):
-    identifier = "{}|{}".format(path, params)
+def set_cached(data, path, params=None):
+    if params is None:
+        params = {}
+    identifier = f"{path}|{params}"
     cache.set(
         identifier,
         data,
@@ -1018,7 +1069,7 @@ def set_cached(data, path, params={}):
 
 
 def db_get(name, func, path, params):
-    identifier = "{}|{}".format(path, params)
+    identifier = f"{path}|{params}"
     data = cache.get(identifier)
     if not data:
         if name == "search_client":
@@ -1031,8 +1082,10 @@ def db_get(name, func, path, params):
     return data
 
 
-def tvdb_get(path, params={}):
-    identifier = "{}|{}".format(path, params)
+def tvdb_get(path, params=None):
+    if params is None:
+        params = {}
+    identifier = f"{path}|{params}"
     data = cache.get(identifier)
     if data:
         return data
@@ -1047,22 +1100,22 @@ def tvdb_get(path, params={}):
 
 
 def set_pluging_category(heading: str):
-    setPluginCategory(ADDON_HANDLE, heading)
+    setPluginCategory(get_addon_handle(), heading)
 
 
 def set_content_type(mode, media_type="movies"):
     if mode == "season":
-        setContent(ADDON_HANDLE, SEASONS_TYPE)
+        setContent(get_addon_handle(), SEASONS_TYPE)
     elif mode == "episode":
-        setContent(ADDON_HANDLE, EPISODES_TYPE)
+        setContent(get_addon_handle(), EPISODES_TYPE)
     elif mode == "files":
-        setContent(ADDON_HANDLE, "files")
+        setContent(get_addon_handle(), "files")
     elif mode in ("tv", "anime") or media_type == "tv":
-        setContent(ADDON_HANDLE, SHOWS_TYPE)
+        setContent(get_addon_handle(), SHOWS_TYPE)
     elif mode == "movies" or media_type == "movies":
-        setContent(ADDON_HANDLE, MOVIES_TYPE)
+        setContent(get_addon_handle(), MOVIES_TYPE)
     else:
-        setContent(ADDON_HANDLE, TITLES_TYPE)
+        setContent(get_addon_handle(), TITLES_TYPE)
 
 
 def get_provider_color(provider_name, formatted=True):
@@ -1087,9 +1140,7 @@ def get_random_color(provider_name, formatted=True):
     spec = 10
     for i in range(0, 3):
         offset = spec * i
-        rounded = round(
-            int(hash[offset : offset + spec], 16) / int("F" * spec, 16) * 255
-        )
+        rounded = round(int(hash[offset : offset + spec], 16) / int("F" * spec, 16) * 255)
         colors.append(int(max(rounded, PROVIDER_COLOR_MIN_BRIGHTNESS)))
 
     while (sum(colors) / 3) < PROVIDER_COLOR_MIN_BRIGHTNESS:
@@ -1287,9 +1338,22 @@ def unzip(zip_location, destination_location, destination_check):
             status = True
         else:
             status = False
-    except:
+    except Exception:
         status = False
     return status
+
+
+def truthy_param(value: Any) -> bool:
+    """Return True only for a marker query parameter that was explicitly enabled.
+
+    ``build_url`` round-trips every value through ``urlencode``, so a marker written as
+    ``"1"`` comes back as the string ``"1"``. Everything else -- an absent key, ``None``,
+    ``""``, ``"0"`` or ``"false"`` -- means "not set", which keeps every caller that
+    never emits the marker on its existing path.
+    """
+    if value is True:
+        return True
+    return str(value or "").strip().lower() in ("1", "true")
 
 
 def pre_process(
@@ -1299,13 +1363,15 @@ def pre_process(
     episode: int,
     season: int,
     skip_episode_filter: bool = False,
+    absolute_episode: Optional[int] = None,
 ) -> List[TorrentStream]:
     builder = PreProcessBuilder(results).remove_duplicates()
     builder.extract_codec_hdr()
     builder.filter_by_codec()
     builder.filter_by_hdr()
     if mode == "tv" and not skip_episode_filter:
-        builder.filter_sources(episode_name, episode, season)
+        # None for every non-anime caller, which adds no absolute patterns.
+        builder.filter_sources(episode_name, episode, season, absolute_episode)
     builder.filter_by_source()
     builder.filter_by_quality()
     if get_setting("filter_size_enabled"):
@@ -1333,13 +1399,7 @@ def filter_debrid_episode(
     ep_minus_1 = str(episode_num - 1).zfill(2)
 
     def get_filename(file):
-        return (
-            file.get("path")
-            or file.get("filename")
-            or file.get("name")
-            or file.get("n")
-            or ""
-        )
+        return file.get("path") or file.get("filename") or file.get("name") or file.get("n") or ""
 
     # Normalize filenames for matching
     def normalize_title(title):
@@ -1405,13 +1465,9 @@ def clean_auto_play_undesired(results: List[TorrentStream]) -> List[TorrentStrea
 
 def is_torrent_url(uri):
     res = requests.head(uri, timeout=20, headers=USER_AGENT_HEADER)
-    if (
-        res.status_code == 200
-        and res.headers.get("Content-Type") == "application/octet-stream"
-    ):
-        return True
-    else:
-        return False
+    return bool(
+        res.status_code == 200 and res.headers.get("Content-Type") == "application/octet-stream"
+    )
 
 
 def supported_video_extensions():
@@ -1420,14 +1476,12 @@ def supported_video_extensions():
 
 
 def add_next_button(func_name, page=1, **kwargs):
-    list_item = make_list_item(label="Next")
-    list_item.setArt(
-        {"icon": os.path.join(ADDON_PATH, "resources", "img", "nextpage.png")}
-    )
-
     page += 1
+    list_item = make_list_item(label=f"Next ({page})")
+    list_item.setArt({"icon": os.path.join(ADDON_PATH, "resources", "img", "nextpage.png")})
+
     addDirectoryItem(
-        ADDON_HANDLE,
+        get_addon_handle(),
         build_url(func_name, page=page, **kwargs),
         list_item,
         isFolder=True,
@@ -1555,7 +1609,7 @@ def show_log_export_dialog(params):
     kodi_log_path = os.path.join(translatePath("special://logpath"), log_file)
     if os.path.exists(kodi_log_path):
         try:
-            with open(kodi_log_path, "r", encoding="utf-8", errors="ignore") as f:
+            with open(kodi_log_path, encoding="utf-8", errors="ignore") as f:
                 lines = deque(f, maxlen=500)
 
             content = "".join(reversed(lines))
@@ -1574,7 +1628,7 @@ def show_log_export_dialog(params):
                 copy2clip(paste_url)
                 progressDialog = QRProgressDialog("qr_dialog.xml", ADDON_PATH)
                 progressDialog.setup(
-                            translation(90569),
+                    translation(90569),
                     qr_code,
                     paste_url,
                     is_debrid=False,
@@ -1586,7 +1640,7 @@ def show_log_export_dialog(params):
                         try:
                             count -= 1
                             progressDialog.update_progress(count)
-                        except:
+                        except Exception:
                             pass
                         sleep(1000 * count)
                 else:
@@ -1705,8 +1759,8 @@ def parse_time(item):
             if "," in normalized:
                 weekday_part, remainder = normalized.split(",", 1)
                 weekday_key = weekday_part.strip().lower()
-                normalized = "{},{}".format(
-                    day_replacements.get(weekday_key, weekday_part.strip()), remainder
+                normalized = (
+                    f"{day_replacements.get(weekday_key, weekday_part.strip())},{remainder}"
                 )
 
             normalized = re.sub(
@@ -1747,17 +1801,17 @@ def format_season_episode(season, episode):
     episode_value = normalize(episode)
 
     if isinstance(season_value, int) and isinstance(episode_value, int):
-        return "S{:02d}E{:02d}".format(season_value, episode_value)
+        return f"S{season_value:02d}E{episode_value:02d}"
     if season_value is not None and episode_value is not None:
-        return "S{}E{}".format(season_value, episode_value)
+        return f"S{season_value}E{episode_value}"
     if season_value is not None:
         if isinstance(season_value, int):
-            return "S{:02d}".format(season_value)
-        return "S{}".format(season_value)
+            return f"S{season_value:02d}"
+        return f"S{season_value}"
     if episode_value is not None:
         if isinstance(episode_value, int):
-            return "E{:02d}".format(episode_value)
-        return "E{}".format(episode_value)
+            return f"E{episode_value:02d}"
+        return f"E{episode_value}"
     return ""
 
 
@@ -1782,6 +1836,11 @@ def normalize_tv_data(tv_data):
         return {}
 
     normalized = dict(tv_data)
+
+    # URL-decode the name to handle & in episode titles (issue #198)
+    name = normalized.get("name", "")
+    if name and isinstance(name, str):
+        normalized["name"] = unquote(name)
 
     for key in ("season", "episode"):
         value = _coerce_int(normalized.get(key))

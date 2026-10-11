@@ -1,20 +1,19 @@
 import os
 import pickle
+import re
 import sqlite3
 import sys
 import threading
 import traceback
-import re
-
-from base64 import b64encode, b64decode
-from datetime import datetime, timedelta
+from base64 import b64decode, b64encode
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 
-from lib.jacktook.utils import kodilog
-
-import xbmcaddon
 import xbmc
+import xbmcaddon
 import xbmcgui
+
+from lib.jacktook.utils import kodilog
 
 PY3 = sys.version_info.major >= 3
 if PY3:
@@ -22,9 +21,7 @@ if PY3:
 else:
     from xbmc import translatePath
 
-ADDON_DATA = translatePath(
-    xbmcaddon.Addon("plugin.video.jacktook").getAddonInfo("profile")
-)
+ADDON_DATA = translatePath(xbmcaddon.Addon("plugin.video.jacktook").getAddonInfo("profile"))
 ADDON_ID = xbmcaddon.Addon().getAddonInfo("id")
 
 if not PY3:
@@ -42,6 +39,11 @@ SQLITE_SETTINGS = {
 }
 
 
+def utc_now():
+    """Return the current UTC time in the cache's legacy naive format."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def pickle_hash(obj):
     data = pickle.dumps(obj)
     h = sha256()
@@ -49,7 +51,19 @@ def pickle_hash(obj):
     return h.hexdigest()
 
 
-class _BaseCache(object):
+def _like_regex(pattern):
+    """Translate a SQL LIKE pattern into an anchored regular expression."""
+    regex_pattern = (
+        re.escape(pattern)
+        .replace(r"\%", ".*")
+        .replace("%", ".*")
+        .replace(r"\_", ".")
+        .replace("_", ".")
+    )
+    return re.compile(f"^{regex_pattern}$")
+
+
+class _BaseCache:
     __instance = None
 
     _load_func = staticmethod(pickle.loads)
@@ -128,7 +142,7 @@ class MemoryCache(_BaseCache):
                 if isinstance(decoded_data, tuple) and len(decoded_data) == 2:
                     val, expires = decoded_data
                     if isinstance(expires, datetime):
-                        if expires > datetime.utcnow():
+                        if expires > utc_now():
                             return val
                         else:
                             self.delete(key)
@@ -141,14 +155,14 @@ class MemoryCache(_BaseCache):
         self._add_key_to_index(key)
         try:
             # Wrap data with expiry
-            expiry_dt = datetime.utcnow() + expires
+            expiry_dt = utc_now() + expires
             val_to_store = (data, expiry_dt)
 
             blob = self._dump_func(val_to_store)
             self._window.setProperty(self._database + key, b64encode(blob).decode())
         except Exception as e:
             kodilog(
-                f"[MemoryCache] Error storing key {key!r}: {str(e)}",
+                f"[MemoryCache] Error storing key {key!r}: {e!s}",
                 level=xbmc.LOGERROR,
             )
             kodilog(traceback.format_exc(), level=xbmc.LOGERROR)
@@ -185,17 +199,15 @@ class MemoryCache(_BaseCache):
             data = self._window.getProperty(self._database + "_KEY_INDEX_")
             if data:
                 return self._load_func(b64decode(data))
-        except:
+        except Exception:
             pass
         return set()
 
     def _save_key_index(self, index):
         try:
             blob = self._dump_func(index)
-            self._window.setProperty(
-                self._database + "_KEY_INDEX_", b64encode(blob).decode()
-            )
-        except:
+            self._window.setProperty(self._database + "_KEY_INDEX_", b64encode(blob).decode())
+        except Exception:
             pass
 
     def _add_key_to_index(self, key):
@@ -291,12 +303,12 @@ class SQLiteCache(_BaseCache):
             ")"
         )
         for k, v in SQLITE_SETTINGS.items():
-            self._conn.execute("PRAGMA {}={}".format(k, v))
+            self._conn.execute(f"PRAGMA {k}={v}")
         self._cleanup_interval = cleanup_interval
-        self._last_cleanup = datetime.utcnow()
-        self.clean_up()
+        self._last_cleanup = utc_now()
         self._object_store = {}  # store raw objects that can't be pickled
         self._lock = threading.Lock()
+        self.clean_up()
 
     def _process(self, obj):
         return self._load_func(obj)
@@ -335,7 +347,7 @@ class SQLiteCache(_BaseCache):
         with self._lock:
             if key in self._object_store:
                 data, expires = self._object_store[key]
-                if expires > datetime.utcnow():
+                if expires > utc_now():
                     return data
                 else:
                     del self._object_store[key]
@@ -351,7 +363,7 @@ class SQLiteCache(_BaseCache):
                 return None
             if result:
                 data, expires = result
-                if expires > datetime.utcnow():
+                if expires > utc_now():
                     return self._process(data)
             return None
 
@@ -364,39 +376,46 @@ class SQLiteCache(_BaseCache):
                     (
                         key,
                         sqlite3.Binary(self._prepare(data)),
-                        datetime.utcnow() + expires,
+                        utc_now() + expires,
                     ),
                 )
                 kodilog(
-                    "Set cache for key '{}' with expiry {}".format(key, expires),
+                    f"Set cache for key '{key}' with expiry {expires}",
                     level=xbmc.LOGDEBUG,
                 )
             except Exception as e:
                 kodilog(
-                    "Failed to set cache for key '{}': {}".format(key, str(e)),
+                    f"Failed to set cache for key '{key}': {e!s}",
                     level=xbmc.LOGERROR,
                 )
                 # fallback to raw in‑memory store
-                self._object_store[key] = (data, expires)
+                expiry_at = expires if isinstance(expires, datetime) else utc_now() + expires
+                self._object_store[key] = (data, expiry_at)
 
     def clear_list(self, key):
         """Clear the list stored under the given key."""
         self.set(
             key,
             self._prepare([]),
-            datetime.utcnow(),  # Set an immediate expiry to clear the list
+            utc_now(),  # Set an immediate expiry to clear the list
         )
 
     def delete(self, key):
-        """Remove a single key from the SQLite store."""
-        self._conn.execute("DELETE FROM `cached` WHERE key = ?", (key,))
+        """Remove a single key from the SQLite and fallback stores."""
+        with self._lock:
+            self._object_store.pop(key, None)
+            self._conn.execute("DELETE FROM `cached` WHERE key = ?", (key,))
 
     def delete_like(self, pattern):
-        """Remove keys matching a pattern from the SQLite store."""
-        self._conn.execute("DELETE FROM `cached` WHERE key LIKE ?", (pattern,))
+        """Remove keys matching a pattern from the SQLite and fallback stores."""
+        with self._lock:
+            regex = _like_regex(pattern)
+            for store_key in [k for k in self._object_store if regex.match(k)]:
+                del self._object_store[store_key]
+            self._conn.execute("DELETE FROM `cached` WHERE key LIKE ?", (pattern,))
 
     def _set_version(self, version):
-        self._conn.execute("PRAGMA user_version={}".format(version))
+        self._conn.execute(f"PRAGMA user_version={version}")
 
     @property
     def version(self):
@@ -404,22 +423,30 @@ class SQLiteCache(_BaseCache):
 
     @property
     def needs_cleanup(self):
-        return self._last_cleanup + self._cleanup_interval < datetime.utcnow()
+        return self._last_cleanup + self._cleanup_interval < utc_now()
 
     def clean_up(self):
+        """Remove expired rows; acquires ``self._lock``."""
+        with self._lock:
+            self._clean_up_locked()
+
+    def _clean_up_locked(self):
+        """Remove expired rows; the caller must hold ``self._lock``."""
         self._conn.execute(
             "DELETE FROM `cached` WHERE expires <= STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')"
         )
-        self._last_cleanup = datetime.utcnow()
+        self._last_cleanup = utc_now()
 
     def clean_all(self):
-        self._conn.execute("DELETE FROM cached")
-        self._object_store.clear()
+        with self._lock:
+            self._conn.execute("DELETE FROM cached")
+            self._object_store.clear()
 
     def check_clean_up(self):
+        """Run periodic cleanup if due; the caller must hold ``self._lock``."""
         clean_up = self.needs_cleanup
         if clean_up:
-            self.clean_up()
+            self._clean_up_locked()
         return clean_up
 
     def close(self):

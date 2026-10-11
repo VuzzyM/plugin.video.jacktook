@@ -1,4 +1,6 @@
+import contextlib
 from time import time
+from typing import Any, Dict
 
 from lib.gui.qr_progress_dialog import QRProgressDialog
 from lib.jacktook.utils import ADDON_PATH
@@ -9,9 +11,34 @@ from lib.utils.kodi.utils import (
     dialog_ok,
     progressDialog,
     set_setting,
-    sleep as ksleep,
     translation,
 )
+from lib.utils.kodi.utils import (
+    sleep as ksleep,
+)
+
+
+def parse_positive_int(value: Any, default: int) -> int:
+    """Parses a positive integer from a device response, falling back on bad input."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def resolve_device_verification_url(response: Dict[str, Any]) -> str:
+    """Returns the best verification URL for a Real-Debrid device flow.
+
+    The documented device/code response carries ``verification_url``. Some
+    deployments also return ``direct_verification_url``, which pre-fills the
+    user code, so prefer it when present and fall back otherwise.
+    """
+    direct = response.get("direct_verification_url")
+    if isinstance(direct, str) and direct:
+        return direct
+    fallback = response.get("verification_url")
+    return fallback if isinstance(fallback, str) else ""
 
 
 def run_realdebrid_auth(client):
@@ -19,11 +46,15 @@ def run_realdebrid_auth(client):
     if not response:
         return
 
-    sleep_interval = int(response["interval"])
-    expires_in = int(response["expires_in"])
-    device_code = response["device_code"]
-    user_code = response["user_code"]
-    auth_url = response["direct_verification_url"]
+    sleep_interval = parse_positive_int(response.get("interval"), 5)
+    expires_in = parse_positive_int(response.get("expires_in"), 1800)
+    device_code = response.get("device_code")
+    user_code = response.get("user_code")
+    if not device_code or not user_code:
+        return
+    auth_url = resolve_device_verification_url(response)
+    if not auth_url:
+        return
 
     qr_code = make_qrcode(auth_url)
     copy2clip(auth_url)
@@ -136,7 +167,7 @@ def run_premiumize_auth(client):
     response = client.get_device_code()
     user_code = response["user_code"]
     copy2clip(user_code)
-    content = "%s[CR]%s[CR]%s" % (
+    content = "{}[CR]{}[CR]{}".format(
         translation(90540),
         translation(90541) % response.get("verification_uri"),
         translation(90542) % user_code,
@@ -179,10 +210,8 @@ def run_premiumize_auth(client):
             dialog_ok(translation(90546), translation(90547) % error)
             break
 
-    try:
+    with contextlib.suppress(Exception):
         progressDialog.close()
-    except Exception:
-        pass
 
 
 def run_torbox_auth(client):
@@ -248,6 +277,86 @@ def run_torbox_auth(client):
             progress_dialog.close_dialog()
             dialog_ok(translation(90548), translation(90547) % error)
             return
+
+
+def run_offcloud_auth(client):
+    response = client.get_device_code()
+    if not response:
+        return
+
+    sleep_interval = int(response.get("interval", 5))
+    expires_in = int(response.get("expires_in", 600))
+    device_code = response.get("device_code")
+    user_code = response.get("user_code")
+    auth_url = response.get("verification_uri")
+    qr_url = response.get("verification_uri_complete") or auth_url
+    if not device_code or not user_code or not auth_url:
+        return
+
+    qr_code = make_qrcode(qr_url)
+    copy2clip(qr_url)
+
+    progress_dialog = QRProgressDialog("qr_dialog.xml", ADDON_PATH)
+    progress_dialog.setup(
+        translation(90604) % DebridType.OC,
+        qr_code,
+        auth_url,
+        user_code,
+        DebridType.OC,
+    )
+    progress_dialog.show_dialog()
+
+    start_time = time()
+    while time() - start_time < expires_in:
+        ksleep(1000 * sleep_interval)
+        if progress_dialog.iscanceled:
+            progress_dialog.close_dialog()
+            return
+
+        auth_response = client.authorize(device_code)
+        error_code = auth_response.get("error") if isinstance(auth_response, dict) else None
+        if error_code == "authorization_pending":
+            elapsed = time() - start_time
+            progress_dialog.update_progress(int((elapsed / expires_in) * 100))
+            continue
+        if error_code == "slow_down":
+            sleep_interval += 5
+            elapsed = time() - start_time
+            progress_dialog.update_progress(int((elapsed / expires_in) * 100))
+            continue
+        if error_code in ("expired_token", "access_denied"):
+            progress_dialog.close_dialog()
+            dialog_ok(translation(90548), auth_response.get("error_description", error_code))
+            return
+
+        try:
+            access_token = auth_response.get("access_token")
+            if access_token:
+                client.token = str(access_token)
+                set_setting("offcloud_token", client.token)
+                set_setting("offcloud_authorized", "true")
+                client.initialize_headers()
+
+                with contextlib.suppress(Exception):
+                    account_info = client.get_account_info()
+                    user = account_info.get("email") or account_info.get("user_id")
+                    if user:
+                        set_setting("offcloud_user", str(user))
+
+                progress_dialog.update_progress(100, translation(90545))
+                progress_dialog.close_dialog()
+                dialog_ok(translation(90544), translation(90545))
+                return
+
+            elapsed = time() - start_time
+            progress_dialog.update_progress(int((elapsed / expires_in) * 100))
+        except Exception as error:
+            progress_dialog.close_dialog()
+            dialog_ok(translation(90548), translation(90547) % error)
+            return
+
+    with contextlib.suppress(Exception):
+        progress_dialog.close_dialog()
 
 
 def run_debrider_auth(client):

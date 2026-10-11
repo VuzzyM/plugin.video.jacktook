@@ -3,14 +3,14 @@ import io
 import itertools
 
 ONE_CHAR = 1
-INTEGER_START = b'i'
-LIST_START = b'l'
-DICT_START = b'd'
-END = b'e'
-NEGATIVE_SIGN = b'-'
-STRING_LENGTH_SEPARATOR = b':'
+INTEGER_START = b"i"
+LIST_START = b"l"
+DICT_START = b"d"
+END = b"e"
+NEGATIVE_SIGN = b"-"
+STRING_LENGTH_SEPARATOR = b":"
 
-__all__ = ['decode', 'DecodingError', 'encode']
+__all__ = ["DecodingError", "decode", "encode"]
 
 
 class DecodingError(ValueError):
@@ -18,12 +18,13 @@ class DecodingError(ValueError):
 
 
 def byte_is_integer(b):
-    return b'0' <= b <= b'9'
+    return b"0" <= b <= b"9"
 
 
 def group_by(it, n):
     """
     >>> list(group_by([1, 2, 3, 4], 2))
+
     [(1, 2), (3, 4)]
     """
     return zip(*[itertools.islice(it2, i, None, n) for i, it2 in enumerate(itertools.tee(it))])
@@ -53,7 +54,7 @@ def _read_integer(buf):
         c = buf.read(ONE_CHAR)
 
     n = acc.getvalue()
-    if n.startswith(b'0') and len(n) > 1:  # '03' is illegal
+    if n.startswith(b"0") and len(n) > 1:  # '03' is illegal
         raise DecodingError
     n = int(n)
     if n == 0 and negative:  # '-0' is illegal
@@ -132,7 +133,7 @@ def decode(s):
 def encode(obj):
     def generator(obj):
         if isinstance(obj, dict):
-            if not all(isinstance(k, bytes) for k in obj.keys()):
+            if not all(isinstance(k, bytes) for k in obj):
                 raise ValueError("Dictionary keys must be strings")
             yield DICT_START
             # Dictionary keys should be sorted according to the BEP-0003:
@@ -148,14 +149,14 @@ def encode(obj):
                 yield from generator(elem)
             yield END
         elif isinstance(obj, bytes):
-            yield str(len(obj)).encode('ascii')
+            yield str(len(obj)).encode("ascii")
             yield STRING_LENGTH_SEPARATOR
             yield obj
         elif isinstance(obj, int):
             yield INTEGER_START
-            yield str(obj).encode('ascii')
+            yield str(obj).encode("ascii")
             yield END
         else:
-            raise ValueError("type {} not supported".format(type(obj)))
+            raise ValueError(f"type {type(obj)} not supported")
 
-    return b''.join(generator(obj))
+    return b"".join(generator(obj))

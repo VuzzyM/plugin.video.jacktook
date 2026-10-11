@@ -1,52 +1,250 @@
-from lib.utils.kodi.utils import translation, get_setting
+from lib.api.nuvio import is_nuvio_progress_sync_enabled
+from lib.utils.kodi.utils import get_setting, translation
 from lib.utils.views.continue_watching import has_continue_watching_items
-
+from lib.utils.views.nuvio_collections import has_nuvio_collections
+from lib.utils.views.nuvio_continue_watching import has_nuvio_continue_watching_items
+from lib.utils.views.nuvio_history import has_nuvio_history_items
+from lib.utils.views.nuvio_library import has_nuvio_library_items
+from lib.utils.views.simkl_continue_watching import has_simkl_continue_watching_items
+from lib.utils.views.trakt_continue_watching import has_trakt_continue_watching_items
 
 trakt_tv_library_items = [
-    {"name": translation(90035), "mode": "tv", "api": "trakt", "query": "trakt_watchlist", "icon": "trakt.png"},
-    {"name": translation(90294), "mode": "tv", "api": "trakt", "query": "trakt_collection", "icon": "trakt.png"},
-    {"name": translation(90295), "mode": "tv", "api": "trakt", "query": "trakt_favorites", "icon": "trakt.png"},
-    {"name": translation(90296), "mode": "tv", "api": "trakt", "query": "trakt_up_next", "icon": "trakt.png"},
-    {"name": translation(90034), "mode": "tv", "api": "trakt", "query": "trakt_watched_history", "icon": "trakt.png"},
-    {"name": translation(90297), "mode": "tv", "api": "trakt", "query": "trakt_my_lists", "icon": "trakt.png"},
-    {"name": translation(90298), "mode": "tv", "api": "trakt", "query": "trakt_liked_lists", "icon": "trakt.png"},
-    {"name": translation(90076), "mode": "tv", "api": "trakt", "query": "trakt_search_lists", "icon": "trakt.png"},
-    {"name": translation(30916), "mode": "tv", "api": "trakt", "query": "trakt_account_info", "icon": "trakt.png"},
+    {
+        "name": translation(90035),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_watchlist",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90294),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_collection",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90295),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_favorites",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90296),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_up_next",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90034),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_watched_history",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90297),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_my_lists",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90298),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_liked_lists",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90033),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_recommendations",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(30896),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_calendar",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(30916),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_account_info",
+        "icon": "trakt.png",
+    },
 ]
 
 
 trakt_tv_discovery_items = [
-    {"name": translation(90028), "mode": "tv", "api": "trakt", "query": "trakt_trending", "icon": "trakt.png"},
-    {"name": translation(90029), "mode": "tv", "api": "trakt", "query": "trakt_watched", "icon": "trakt.png"},
-    {"name": translation(90030), "mode": "tv", "api": "trakt", "query": "trakt_favorited", "icon": "trakt.png"},
-    {"name": translation(90033), "mode": "tv", "api": "trakt", "query": "trakt_recommendations", "icon": "trakt.png"},
-    {"name": translation(90032), "mode": "tv", "api": "trakt", "query": "trakt_trending_lists", "icon": "trakt.png"},
-    {"name": translation(90031), "mode": "tv", "api": "trakt", "query": "trakt_popular_lists", "icon": "trakt.png"},
-    {"name": translation(30896), "mode": "tv", "api": "trakt", "query": "trakt_calendar", "icon": "trakt.png"},
+    {
+        "name": translation(90028),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_trending",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90029),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_watched",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90030),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_favorited",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90076),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_search_lists",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90032),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_trending_lists",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90031),
+        "mode": "tv",
+        "api": "trakt",
+        "query": "trakt_popular_lists",
+        "icon": "trakt.png",
+    },
 ]
 
 
 trakt_movie_library_items = [
-    {"name": translation(90035), "mode": "movies", "api": "trakt", "query": "trakt_watchlist", "icon": "trakt.png"},
-    {"name": translation(90294), "mode": "movies", "api": "trakt", "query": "trakt_collection", "icon": "trakt.png"},
-    {"name": translation(90295), "mode": "movies", "api": "trakt", "query": "trakt_favorites", "icon": "trakt.png"},
-    {"name": translation(90200), "mode": "movies", "api": "trakt", "query": "trakt_movies_progress", "icon": "trakt.png"},
-    {"name": translation(90034), "mode": "movies", "api": "trakt", "query": "trakt_watched_history", "icon": "trakt.png"},
-    {"name": translation(90297), "mode": "movies", "api": "trakt", "query": "trakt_my_lists", "icon": "trakt.png"},
-    {"name": translation(90298), "mode": "movies", "api": "trakt", "query": "trakt_liked_lists", "icon": "trakt.png"},
-    {"name": translation(90076), "mode": "movies", "api": "trakt", "query": "trakt_search_lists", "icon": "trakt.png"},
-    {"name": translation(30916), "mode": "movies", "api": "trakt", "query": "trakt_account_info", "icon": "trakt.png"},
+    {
+        "name": translation(90035),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_watchlist",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90294),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_collection",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90295),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_favorites",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90200),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_movies_progress",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90034),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_watched_history",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90297),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_my_lists",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90298),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_liked_lists",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90033),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_recommendations",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(30916),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_account_info",
+        "icon": "trakt.png",
+    },
 ]
 
 
 trakt_movie_discovery_items = [
-    {"name": translation(90028), "mode": "movies", "api": "trakt", "query": "trakt_trending", "icon": "trakt.png"},
-    {"name": translation(90036), "mode": "movies", "api": "trakt", "query": "trakt_top10", "icon": "trakt.png"},
-    {"name": translation(90029), "mode": "movies", "api": "trakt", "query": "trakt_watched", "icon": "trakt.png"},
-    {"name": translation(90030), "mode": "movies", "api": "trakt", "query": "trakt_favorited", "icon": "trakt.png"},
-    {"name": translation(90033), "mode": "movies", "api": "trakt", "query": "trakt_recommendations", "icon": "trakt.png"},
-    {"name": translation(90032), "mode": "movies", "api": "trakt", "query": "trakt_trending_lists", "icon": "trakt.png"},
-    {"name": translation(90031), "mode": "movies", "api": "trakt", "query": "trakt_popular_lists", "icon": "trakt.png"},
+    {
+        "name": translation(90028),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_trending",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90036),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_top10",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90029),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_watched",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90030),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_favorited",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90076),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_search_lists",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90032),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_trending_lists",
+        "icon": "trakt.png",
+    },
+    {
+        "name": translation(90031),
+        "mode": "movies",
+        "api": "trakt",
+        "query": "trakt_popular_lists",
+        "icon": "trakt.png",
+    },
 ]
 
 
@@ -116,11 +314,17 @@ tv_items = [
         "icon": "tmdb.png",
     },
     {
-        "name": translation(90073),
+        "name": translation(90962),
         "mode": "tv",
         "api": "mdblist",
         "query": "mdblist",
         "icon": "mdblist.png",
+    },
+    {
+        "name": translation(90981),
+        "icon": "simkl.png",
+        "action": "simkl_library_statuses",
+        "params": {"media_type": "shows"},
     },
     {
         "name": translation(90292),
@@ -189,11 +393,17 @@ movie_items = [
         "icon": "tmdb.png",
     },
     {
-        "name": translation(90073),
+        "name": translation(90962),
         "mode": "movies",
         "api": "mdblist",
         "query": "mdblist",
         "icon": "mdblist.png",
+    },
+    {
+        "name": translation(90981),
+        "icon": "simkl.png",
+        "action": "simkl_library_statuses",
+        "params": {"media_type": "movies"},
     },
     {
         "name": translation(90292),
@@ -312,6 +522,24 @@ root_menu_items = [
         "action": "continue_watching_menu",
         "condition": has_continue_watching_items,
     },  # Continue Watching
+    {
+        "name": "Simkl Continue Watching",
+        "icon": "continue_watching.png",
+        "action": "simkl_continue_watching",
+        "condition": has_simkl_continue_watching_items,
+    },
+    {
+        "name": "Trakt Continue Watching",
+        "icon": "continue_watching.png",
+        "action": "trakt_continue_watching",
+        "condition": has_trakt_continue_watching_items,
+    },
+    {
+        "name": translation(91038),
+        "icon": "nuvio.png",
+        "action": "nuvio_menu",
+        "condition": is_nuvio_progress_sync_enabled,
+    },
     {"name": 90007, "icon": "tv.png", "action": "tv_shows_items"},
     {"name": 90008, "icon": "movies.png", "action": "movies_items"},
     {"name": 90009, "icon": "anime.png", "action": "anime_menu"},
@@ -322,7 +550,7 @@ root_menu_items = [
         "name": 90013,
         "icon": "telegram.png",
         "action": "telegram_menu",
-        "condition": lambda: get_setting("show_telegram_menu"),
+        "condition": lambda: bool(get_setting("jackgram_enabled")),
     },
     {"name": 90014, "icon": "cloud2.png", "action": "cloud"},
     {"name": 90015, "icon": "download2.png", "action": "downloads_menu"},
@@ -339,22 +567,53 @@ history_menu_items = [
     {"name": 90021, "icon": "history.png", "action": "titles_calendar"},
 ]
 
+nuvio_menu_items = [
+    {
+        "name": 90200,
+        "icon": "continue_watching.png",
+        "action": "nuvio_continue_watching",
+        "condition": has_nuvio_continue_watching_items,
+    },
+    {
+        "name": 90017,
+        "icon": "history.png",
+        "action": "nuvio_history",
+        "condition": has_nuvio_history_items,
+    },
+    {
+        "name": 91032,
+        "icon": "movies.png",
+        "action": "nuvio_library",
+        "params": {"mode": "movies"},
+        "condition": has_nuvio_library_items,
+    },
+    {
+        "name": 91033,
+        "icon": "tv.png",
+        "action": "nuvio_library",
+        "params": {"mode": "tv"},
+        "condition": has_nuvio_library_items,
+    },
+    {
+        "name": 91051,
+        "icon": "movies.png",
+        "action": "nuvio_collections",
+        "condition": has_nuvio_collections,
+    },
+]
+
 library_menu_items = [
     {
         "name": 90202,
         "icon": "tv.png",
         "action": "library_shows",
-        "context_menu": [
-            {"label": 90690, "action": "library_shows", "params": {"clear": 1}}
-        ],
+        "context_menu": [{"label": 90690, "action": "library_shows", "params": {"clear": 1}}],
     },  # My Shows
     {
         "name": 90203,
         "icon": "movies.png",
         "action": "library_movies",
-        "context_menu": [
-            {"label": 90690, "action": "library_movies", "params": {"clear": 1}}
-        ],
+        "context_menu": [{"label": 90690, "action": "library_movies", "params": {"clear": 1}}],
     },  # My Movies
     {
         "name": 90021,

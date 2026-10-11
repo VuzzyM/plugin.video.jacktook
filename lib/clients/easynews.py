@@ -1,9 +1,18 @@
 import re
-from urllib.parse import quote
+from typing import Any, Callable, List, Optional, Tuple
+from urllib.parse import quote, urlparse
+
 from lib.clients.base import BaseClient, TorrentStream
+from lib.utils.general.utils import Indexer, IndexerType
 from lib.utils.kodi.utils import kodilog
-from lib.utils.general.utils import IndexerType, Indexer
-from typing import List, Optional, Any, Callable, Tuple
+from lib.utils.parsers.title_parser import matches_title
+
+SERIES_QUERY_RE = re.compile(r"\bs\d{1,3}(?:e\d{1,3})?\b", re.IGNORECASE)
+
+
+def is_series_query(query: str) -> bool:
+    """Whether a search query targets a TV episode/season (SxxExx or Sxx)."""
+    return bool(SERIES_QUERY_RE.search(query or ""))
 
 VIDEO_EXTENSIONS = (
     "m4v,3g2,3gp,nsv,tp,ts,ty,pls,rm,rmvb,mpd,ifo,mov,qt,divx,xvid,bivx,vob,nrg,img,iso,udf,pva,wmv,asf,asx,ogm,m2v,avi,bin,dat,mpg,mpeg,mp4,mkv,"
@@ -29,11 +38,14 @@ SEARCH_PARAMS = {
     "pby": 150,
 }
 
+ADULT_GROUP_RE = re.compile(
+    r"(erotic|xxx|porn|pron|masturbat|bestial|incest|hentai|shemale|transsex|(?:^|\.)sex)",
+    re.IGNORECASE,
+)
+
 
 class Easynews(BaseClient):
-    def __init__(
-        self, user: str, password: str, timeout: int, notification: Callable
-    ) -> None:
+    def __init__(self, user: str, password: str, timeout: int, notification: Callable) -> None:
         super().__init__("https://members.easynews.com", notification)
         self.user = user
         self.password = password
@@ -47,6 +59,7 @@ class Easynews(BaseClient):
         media_type: str,
         season: Optional[int] = None,
         episode: Optional[int] = None,
+        **kwargs: Any,
     ) -> List[TorrentStream]:
         search_query = query
         if mode == "tv" and season:
@@ -59,20 +72,51 @@ class Easynews(BaseClient):
         params = SEARCH_PARAMS.copy()
         params["gps"] = search_query
 
+        total_max_results = 500
+        max_pages = 10
+        results: List[TorrentStream] = []
+        previous_first_hash: Optional[str] = None
+
         try:
-            response = self.session.get(
-                self.base_url,
-                params=params,
-                auth=(self.user, self.password),
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            return self.parse_response(response)
+            for page_nr in range(1, max_pages + 1):
+                remaining = total_max_results - len(results)
+                if remaining <= 0:
+                    break
+
+                page_params = params.copy()
+                page_params["pno"] = page_nr
+                page_params["pby"] = min(SEARCH_PARAMS.get("pby", 150), remaining)
+
+                response = self.session.get(
+                    self.base_url,
+                    params=page_params,
+                    auth=(self.user, self.password),
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                page_results = self.parse_response(response, query=search_query)
+
+                if not page_results:
+                    break
+
+                # Detect the API re-serving the same page (cycling).
+                first_hash = page_results[0].title
+                if previous_first_hash is not None and first_hash == previous_first_hash:
+                    break
+                previous_first_hash = first_hash
+
+                results.extend(page_results)
+
+            return results
         except Exception as e:
             kodilog(f"EasyNews search error: {e}")
+            # Keep partial results collected before the failure instead of
+            # discarding them: a mid-pagination error still yields usable
+            if results:
+                return results
             return []
 
-    def parse_response(self, res: Any) -> List[TorrentStream]:
+    def parse_response(self, res: Any, query: Optional[str] = None) -> List[TorrentStream]:
         results = []
         try:
             response_json = res.json()
@@ -82,7 +126,12 @@ class Easynews(BaseClient):
         if not response_json or "data" not in response_json:
             return results
 
-        down_url = response_json.get("downURL")
+        down_url = str(response_json.get("downURL") or "").strip()
+        if down_url.startswith("//"):
+            down_url = f"https:{down_url}"
+        parsed_down_url = urlparse(down_url)
+        if parsed_down_url.scheme not in ("http", "https") or not parsed_down_url.netloc:
+            return results
         dl_farm = response_json.get("dlFarm")
         dl_port = response_json.get("dlPort")
 
@@ -104,12 +153,24 @@ class Easynews(BaseClient):
                     continue
                 if item.get("virus"):
                     continue
+                if item.get("passwd"):
+                    continue
+                if ADULT_GROUP_RE.search(str(item.get("9") or "")):
+                    continue
                 if re.match(r"^\d+s", duration) or re.match(r"^[0-5]m", duration):
                     continue
 
-                url = down_url + quote(
-                    f"/{dl_farm}/{dl_port}/{post_hash}{ext}/{post_title}{ext}"
-                )
+                # Title matching: drop posts that don't correspond to the
+                # searched title (full-text indexers return anything containing
+                # the query words). TV queries carry SxxExx so they may use the
+                # relaxed matcher; movie queries force strict matching.
+                if query:
+                    strict = not is_series_query(query)
+                    if not matches_title(post_title, query, strict):
+                        kodilog(f"Easynews rejected by title: {post_title!r} vs {query!r}")
+                        continue
+
+                url = down_url + quote(f"/{dl_farm}/{dl_port}/{post_hash}{ext}/{post_title}{ext}")
                 title = post_title
 
                 results.append(
@@ -182,6 +243,7 @@ class Easynews(BaseClient):
 
     def get_info(self) -> None:
         from datetime import datetime
+
         from lib.utils.kodi.utils import dialog_text, kodilog, translation
 
         try:

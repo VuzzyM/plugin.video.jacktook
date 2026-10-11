@@ -1,4 +1,10 @@
+import datetime
+
+import requests
+from requests.adapters import HTTPAdapter
+
 from lib.api.debrid.base import DebridClient, ProviderException
+from lib.services.debrid.auth import run_torbox_auth
 from lib.utils.kodi.utils import (
     dialog_ok,
     kodilog,
@@ -6,10 +12,6 @@ from lib.utils.kodi.utils import (
     set_setting,
     translation,
 )
-import datetime
-import requests
-from requests.adapters import HTTPAdapter
-from lib.services.debrid.auth import run_torbox_auth
 
 
 class Torbox(DebridClient):
@@ -55,15 +57,46 @@ class Torbox(DebridClient):
     ):
         params = params or {}
         url = self.BASE_URL + url
-        return super()._make_request(
-            method,
-            url,
-            data=data,
-            params=params,
-            json=json,
-            is_return_none=is_return_none,
-            is_expected_to_fail=is_expected_to_fail,
-        )
+        response = self._perform_request(method, url, data, params, json)
+        validated_response = self._validate_error_response(response)
+        if validated_response is not None:
+            return validated_response
+        self._handle_errors(response, is_expected_to_fail)
+        return self._parse_response(response, is_return_none)
+
+    def _validate_error_response(self, response):
+        if response.ok:
+            return None
+
+        content_type = response.headers.get("Content-Type", "")
+        if not content_type.startswith("application/json"):
+            return None
+
+        try:
+            error_data = response.json()
+        except ValueError:
+            return None
+
+        if not isinstance(error_data, dict):
+            return None
+
+        error_code = error_data.get("error", "")
+        error_detail = str(error_data.get("detail", "")).lower()
+
+        if (
+            response.status_code == 400
+            and error_code == "DIFF_ISSUE"
+            and "already queued" in error_detail
+        ):
+            kodilog(
+                "Torbox._validate_error_response: treating duplicate queued torrent as recoverable state"
+            )
+            normalized = dict(error_data)
+            normalized["success"] = True
+            normalized["queued"] = True
+            return normalized
+
+        return None
 
     def add_magnet_link(self, magnet_link):
         return self._make_request(
@@ -77,7 +110,11 @@ class Torbox(DebridClient):
         response = self.session.request(
             method="POST",
             url=f"{self.BASE_URL}/torrents/createtorrent",
-            data={"seed": 3, "allow_zip": "false", "name": torrent_name or "torrent.torrent"},
+            data={
+                "seed": 3,
+                "allow_zip": "false",
+                "name": torrent_name or "torrent.torrent",
+            },
             files={
                 "file": (
                     torrent_name or "torrent.torrent",
@@ -102,7 +139,7 @@ class Torbox(DebridClient):
             if "Request timed out" in str(exc):
                 raise ProviderException(
                     "Torbox timed out while checking your cloud torrents. Please try again."
-                )
+                ) from exc
             raise
 
     def get_torrent_info(self, magnet_id):

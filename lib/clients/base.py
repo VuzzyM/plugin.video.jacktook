@@ -1,6 +1,14 @@
 from abc import ABC, abstractmethod
+from typing import Any, Callable, List, Optional
+
 from requests import Session
-from typing import Any, List, Optional, Callable
+from requests.adapters import HTTPAdapter
+
+try:
+    from urllib3.util.retry import Retry
+except ImportError:
+    from requests.packages.urllib3.util.retry import Retry
+
 from lib.domain.torrent import TorrentStream
 from lib.utils.kodi.utils import notification
 
@@ -10,6 +18,17 @@ class BaseClient(ABC):
         self.host = host.rstrip("/") if host else ""
         self.notification = notification
         self.session = Session()
+        self.timeout = (5, 15)
+        retry = Retry(
+            total=2,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
     @abstractmethod
     def search(

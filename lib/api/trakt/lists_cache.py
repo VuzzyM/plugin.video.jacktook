@@ -1,6 +1,5 @@
 from lib.api.trakt.base_cache import BaseCache, get_timestamp
 
-
 GET_ALL = "SELECT id FROM lists"
 DELETE_ALL = "DELETE FROM lists"
 DELETE_PREFIX = 'DELETE FROM lists WHERE id LIKE "%s%%"'
@@ -19,7 +18,7 @@ class ListsCache(BaseCache):
             dbcon.execute(DELETE_ALL)
             dbcon.execute("VACUUM")
             return True
-        except:
+        except Exception:
             return False
 
     def delete_prefix(self, prefix):
@@ -32,7 +31,7 @@ class ListsCache(BaseCache):
             dbcon.execute(DELETE_PREFIX % prefix)
             dbcon.execute("VACUUM")
             return True
-        except:
+        except Exception:
             return False
 
     def clean_database(self):
@@ -41,7 +40,7 @@ class ListsCache(BaseCache):
             dbcon.execute(CLEAN, (get_timestamp(),))
             dbcon.execute("VACUUM")
             return True
-        except:
+        except Exception:
             return False
 
 

@@ -1,11 +1,15 @@
 import json
 import os
-from datetime import datetime, timedelta, timezone
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 
 import requests
 import xbmcgui
 
+from lib.api.stremio.addon_manager import (
+    build_addon_instance_key,
+    build_legacy_addon_instance_key,
+)
 from lib.clients.stremio.constants import (
     STREMIO_ADDONS_CATALOGS_KEY,
     STREMIO_ADDONS_KEY,
@@ -14,7 +18,6 @@ from lib.clients.stremio.constants import (
     decode_selected_ids,
     encode_selected_ids,
 )
-from lib.api.stremio.addon_manager import build_addon_instance_key
 from lib.db.cached import cache
 from lib.db.pickle_db import PickleDatabase
 from lib.utils.general.utils import (
@@ -37,10 +40,9 @@ from lib.utils.kodi.utils import (
     notification,
     set_cached_setting_property,
     set_setting,
-    translation,
     translatePath,
+    translation,
 )
-
 
 BACKUP_VERSION = 1
 CUSTOM_ADDON_EXPIRY = timedelta(days=365 * 20)
@@ -60,9 +62,11 @@ SENSITIVE_SETTING_IDS = {
     "alldebrid_token",
     "debrider_token",
     "torbox_token",
+    "offcloud_token",
     "premiumize_token",
     "easynews_password",
     "stremio_pass",
+    "stremio_auth_key",
     "jackett_apikey",
     "prowlarr_apikey",
     "jackgram_token",
@@ -71,6 +75,10 @@ SENSITIVE_SETTING_IDS = {
     "tmdb_api_key",
     "mdblist_api_key",
     "trakt_secret",
+    "simkl_access_token",
+    "nuvio_access_token",
+    "nuvio_refresh_token",
+    "nuvio_expires_at",
     "webdav_password",
 }
 
@@ -81,6 +89,7 @@ IDENTITY_SETTING_IDS = {
     "real_debrid_user",
     "alldebrid_user",
     "torbox_user",
+    "offcloud_user",
     "trakt_user",
 }
 
@@ -90,11 +99,12 @@ AUTH_STATE_SETTING_IDS = {
     "debrider_authorized",
     "stremio_loggedin",
     "is_trakt_auth",
+    "simkl_authenticated",
+    "nuvio_authenticated",
+    "nuvio_profile_id",
 }
 
-SCRUBBED_SETTING_IDS = (
-    SENSITIVE_SETTING_IDS | IDENTITY_SETTING_IDS | AUTH_STATE_SETTING_IDS
-)
+SCRUBBED_SETTING_IDS = SENSITIVE_SETTING_IDS | IDENTITY_SETTING_IDS | AUTH_STATE_SETTING_IDS
 
 EXTRA_DYNAMIC_SETTINGS = {
     "trakt_token": "",
@@ -144,6 +154,12 @@ def _custom_addon_key(addon):
     return build_addon_instance_key(addon) or None
 
 
+def _custom_addon_keys(addon):
+    return {
+        key for key in (_custom_addon_key(addon), build_legacy_addon_instance_key(addon)) if key
+    }
+
+
 def _get_custom_stremio_addons(user_addons=None):
     user_addons = user_addons if user_addons is not None else (cache.get(STREMIO_USER_ADDONS) or [])
     custom_addons = []
@@ -157,13 +173,15 @@ def _get_custom_stremio_addons(user_addons=None):
 
 
 def _get_custom_selection_map(custom_addons):
-    custom_keys = {
-        addon_key for addon_key in (_custom_addon_key(addon) for addon in custom_addons) if addon_key
+    key_map = {
+        candidate: _custom_addon_key(addon)
+        for addon in custom_addons
+        for candidate in _custom_addon_keys(addon)
     }
     selections = {}
     for label, cache_key in CUSTOM_SELECTION_KEYS.items():
         selected_keys = decode_selected_ids(cache.get(cache_key))
-        selections[label] = [key for key in selected_keys if key in custom_keys]
+        selections[label] = [key_map[key] for key in selected_keys if key in key_map]
     return selections
 
 
@@ -244,8 +262,10 @@ def _normalize_custom_addons(custom_addons):
 
 
 def _filtered_custom_selection_map(cache_payload, custom_addons):
-    custom_keys = {
-        addon_key for addon_key in (_custom_addon_key(addon) for addon in custom_addons) if addon_key
+    key_map = {
+        candidate: _custom_addon_key(addon)
+        for addon in custom_addons
+        for candidate in _custom_addon_keys(addon)
     }
     raw_selections = cache_payload.get("custom_stremio_selections", {})
     filtered = {}
@@ -253,7 +273,7 @@ def _filtered_custom_selection_map(cache_payload, custom_addons):
         values = raw_selections.get(label, [])
         if not isinstance(values, list):
             values = []
-        filtered[label] = [value for value in values if value in custom_keys]
+        filtered[label] = [key_map[value] for value in values if value in key_map]
     return filtered
 
 
@@ -286,9 +306,7 @@ def apply_backup_payload(payload, settings_xml_path=SETTINGS_XML_PATH):
     current_user_addons = list(cache.get(STREMIO_USER_ADDONS) or [])
     current_custom_addons = _get_custom_stremio_addons(current_user_addons)
     current_custom_keys = {
-        addon_key
-        for addon_key in (_custom_addon_key(addon) for addon in current_custom_addons)
-        if addon_key
+        key for addon in current_custom_addons for key in _custom_addon_keys(addon)
     }
     non_custom_addons = [
         addon for addon in current_user_addons if addon.get("transportName") != "custom"
@@ -330,9 +348,7 @@ def reset_all_settings(settings_xml_path=SETTINGS_XML_PATH):
     current_user_addons = list(cache.get(STREMIO_USER_ADDONS) or [])
     current_custom_addons = _get_custom_stremio_addons(current_user_addons)
     current_custom_keys = {
-        addon_key
-        for addon_key in (_custom_addon_key(addon) for addon in current_custom_addons)
-        if addon_key
+        key for addon in current_custom_addons for key in _custom_addon_keys(addon)
     }
     non_custom_addons = [
         addon for addon in current_user_addons if addon.get("transportName") != "custom"

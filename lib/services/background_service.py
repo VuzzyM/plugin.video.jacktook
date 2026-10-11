@@ -1,18 +1,21 @@
+import os
 from threading import Thread
 from time import time
-import os
 
 import xbmc
 import xbmcaddon
 import xbmcvfs
 
+from lib.api.nuvio_store import setup_nuvio_database
 from lib.api.trakt.base_cache import setup_databases
-from lib.services.migrations import run_migrations
+from lib.services.nuvio_sync import NuvioSyncService
 from lib.services.preloader import StartupPreloader
+from lib.services.simkl_sync import SimklSyncService
 from lib.services.trakt_sync import TraktSyncService
 from lib.updater import updates_check_addon
 from lib.utils.kodi.settings import update_delay
 from lib.utils.kodi.utils import (
+    ADDON_VERSION,
     clear_cached_settings,
     clear_property,
     dialog_ok,
@@ -21,10 +24,10 @@ from lib.utils.kodi.utils import (
     get_setting,
     kodilog,
     set_property_no_fallback,
-    translation,
+    set_setting,
     translatePath,
+    translation,
 )
-
 
 first_run_update_prop = "jacktook.first_run_update"
 pause_services_prop = "jacktook.pause_services"
@@ -43,6 +46,7 @@ class CheckKodiVersion:
 class DatabaseSetup:
     def run(self):
         setup_databases()
+        setup_nuvio_database()
 
 
 class UpdateCheck:
@@ -72,9 +76,7 @@ class UpdateCheck:
 
 
 def TMDBHelperAutoInstall():
-    jacktook_select_path = (
-        "special://home/addons/plugin.video.jacktook/jacktook.select.json"
-    )
+    jacktook_select_path = "special://home/addons/plugin.video.jacktook/jacktook.select.json"
 
     if not xbmcvfs.exists(jacktook_select_path):
         kodilog("jacktook.select.json file not found!", level=xbmc.LOGERROR)
@@ -134,7 +136,7 @@ def _read_text_file(path):
         return None
 
     try:
-        with open(translated_path, "r", encoding="utf-8") as file_obj:
+        with open(translated_path, encoding="utf-8") as file_obj:
             return file_obj.read()
     except OSError as error:
         kodilog(f"Failed to read {path}: {error}", level=xbmc.LOGERROR)
@@ -214,47 +216,54 @@ class DebridExpirationCheck:
 
 class JacktookMOnitor(xbmc.Monitor):
     def __init__(self):
-        xbmc.Monitor.__init__(self)
+        # super() resolves through this class's MRO (base captured at import)
+        # instead of re-reading the xbmc module attribute at call time; on
+        # Kodi 22 beta that attribute was observed corrupted at runtime.
+        super().__init__()
         self.startServices()
 
     def startServices(self):
+        set_setting("addon_version", ADDON_VERSION)
         CheckKodiVersion().run()
         DatabaseSetup().run()
-        run_migrations()
         Thread(target=UpdateCheck().run).start()
         Thread(target=TraktSyncService().run).start()
+        Thread(target=SimklSyncService().run).start()
+        Thread(target=NuvioSyncService().run).start()
         Thread(target=DebridExpirationCheck().run).start()
         StartupPreloader().run()
         DownloaderSetup().run()
         TMDBHelperAutoInstall()
         try:
             from lib.services.autostart import AutoStartService
+
             AutoStartService().run()
         except Exception as e:
             kodilog(f"AutoStart failed: {e}", level=xbmc.LOGERROR)
         try:
             from lib.services.widget_refresh import WidgetRefreshService
+
             Thread(target=WidgetRefreshService().run).start()
         except Exception as e:
             kodilog(f"WidgetRefresh failed: {e}", level=xbmc.LOGERROR)
 
     def onScreensaverActivated(self):
         set_property_no_fallback(pause_services_prop, "true")
-        kodilog(
-            "PAUSING Jacktook Services Due to Device Sleep", level=xbmc.LOGINFO
-        )
+        kodilog("PAUSING Jacktook Services Due to Device Sleep", level=xbmc.LOGINFO)
 
     def onScreensaverDeactivated(self):
         clear_property(pause_services_prop)
-        kodilog(
-            "UNPAUSING Jacktook Services Due to Device Awake", level=xbmc.LOGINFO
-        )
+        kodilog("UNPAUSING Jacktook Services Due to Device Awake", level=xbmc.LOGINFO)
 
     def onSettingsChanged(self):
         clear_cached_settings()
         from lib.utils.tmdb_init import ensure_tmdb_init
+
         ensure_tmdb_init()
-        kodilog("Cleared cached settings and refreshed TMDB language after Kodi settings change", level=xbmc.LOGINFO)
+        kodilog(
+            "Cleared cached settings and refreshed TMDB language after Kodi settings change",
+            level=xbmc.LOGINFO,
+        )
 
     def onNotification(self, sender, method, data):
         if method == "System.OnSleep":

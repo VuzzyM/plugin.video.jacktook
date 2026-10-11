@@ -1,8 +1,9 @@
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
+
+from lib.domain.torrent import TorrentStream
 from lib.gui.source_pack_window import SourcePackWindow
 from lib.utils.general.utils import DebridType
-from lib.domain.torrent import TorrentStream
-from lib.utils.player.utils import resolve_playback_url
+from lib.clients.stremio.playback import resolve_stremio_playback_url
 
 
 class SourcePackSelect(SourcePackWindow):
@@ -14,9 +15,7 @@ class SourcePackSelect(SourcePackWindow):
         pack_info: Optional[Dict[str, Any]] = None,
         item_information: Optional[Dict[str, Any]] = None,
     ) -> None:
-        super().__init__(
-            xml_file, location, pack_info=pack_info, item_information=item_information
-        )
+        super().__init__(xml_file, location, pack_info=pack_info, item_information=item_information)
         self.source: Optional[TorrentStream] = source
         self.pack_info: Optional[Dict[str, Any]] = pack_info
         self.position: int = -1
@@ -30,9 +29,8 @@ class SourcePackSelect(SourcePackWindow):
 
     def handle_action(self, action_id: int, control_id: Optional[int] = None) -> None:
         self.position = self.display_list.getSelectedPosition()
-        if action_id == 7:
-            if control_id == 1000:
-                self._resolve_item()
+        if action_id == 7 and control_id == 1000:
+            self._resolve_item()
 
     def _resolve_item(self) -> None:
         self.setProperty("resolving", "true")
@@ -46,7 +44,10 @@ class SourcePackSelect(SourcePackWindow):
                 "mode": self.item_information.get("mode"),
                 "ids": self.item_information.get("ids"),
                 "tv_data": self.item_information.get("tv_data"),
+                "stream_subtitles": self.source.streamSubtitles,
             }
+            if self.source.stremioMetadata is not None:
+                common_data["stremio_metadata"] = self.source.stremioMetadata
             if self.source.debridType in [DebridType.RD, DebridType.TB]:
                 file_id, title = self.pack_info["files"][self.position]
                 data = {
@@ -68,7 +69,7 @@ class SourcePackSelect(SourcePackWindow):
                         "url": url,
                     },
                 }
-            self.playback_info = resolve_playback_url(data)
+            self.playback_info = resolve_stremio_playback_url(data)
 
         if not self.playback_info:
             self.setProperty("resolving", "false")

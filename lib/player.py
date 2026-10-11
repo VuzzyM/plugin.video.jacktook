@@ -1,10 +1,29 @@
+import time
+from datetime import date
+from json import dumps as json_dumps
+from json import loads
 from threading import Thread
+from typing import Optional
+from uuid import uuid4
+
+import xbmc
+from xbmc import getCondVisibility as get_visibility
+from xbmcgui import Dialog, ListItem
+from xbmcplugin import setResolvedUrl
+
+from lib.api.nuvio import NuvioClient, is_nuvio_progress_sync_enabled
+from lib.api.simkl import SimklClient, is_simkl_scrobbling_enabled
+from lib.api.trakt.trakt import TraktAPI, TraktLists, TraktScrobble
 from lib.api.trakt.trakt_utils import is_trakt_auth
 from lib.clients.subtitle.utils import get_language_code
 from lib.clients.tmdb.utils.utils import get_movie_keywords, tmdb_get
-from lib.api.trakt.trakt import TraktAPI, TraktLists
+from lib.db.cached import cache
+from lib.utils.general.utils import (
+    make_listing,
+    set_watched_file,
+)
+from lib.utils.kodi.settings import subtitle_automation_enabled
 from lib.utils.kodi.utils import (
-    ADDON_HANDLE,
     PLAYLIST,
     action_url_run,
     build_url,
@@ -12,6 +31,8 @@ from lib.utils.kodi.utils import (
     close_all_dialog,
     close_busy_dialog,
     execute_builtin,
+    get_addon_handle,
+    get_property,
     get_setting,
     kodilog,
     notification,
@@ -19,27 +40,27 @@ from lib.utils.kodi.utils import (
     sleep,
     translation,
 )
-from lib.utils.general.utils import (
-    make_listing,
-    set_watched_file,
-)
 from lib.utils.player.utils import (
     autoscrape_next_episode,
+    build_elementum_pack_next_playback,
     get_autoscrape_cache_key,
+    get_autoscrape_results_cache_key,
 )
 
-import xbmc
-from xbmc import getCondVisibility as get_visibility
-from xbmcgui import ListItem, Dialog
-from xbmcplugin import setResolvedUrl
-
-from json import dumps as json_dumps, loads
-
+AUTOPLAY_CONTEXT_NEXT_EPISODE = 1
+ACTIVE_PLAYER_SESSION_PROPERTY = "jacktook_active_player_session"
+PLAYNEXT_ACTION_PROPERTY = "jacktook_next_dialog_action"
 total_time_errors = ("0.0", "", 0.0, None)
 video_fullscreen_check = "Window.IsActive(fullscreenvideo)"
+SKIP_SEGMENT_LABEL_IDS = {"intro": 90160, "recap": 90161, "outro": 90169}
+# Only a closed busy dialog after this wait counts as a failed plugin:// start.
+PLUGIN_START_FAILURE_TIMEOUT_MS = 15000
+PLUGIN_START_POLL_INTERVAL_MS = 100
 
 
 class JacktookPLayer(xbmc.Player):
+    _nextep_queue: list = []
+
     def __init__(self, on_started=None, on_error=None):
         xbmc.Player.__init__(self)
         self.url = None
@@ -58,24 +79,140 @@ class JacktookPLayer(xbmc.Player):
         self.on_started = on_started
         self.on_error = on_error
         self._is_trakt_scrobble_active = False
+        self._is_simkl_scrobble_active = False
         self._playback_was_paused = False
+        self._yamtrack_stop_attempted = False
+        self._simkl_resume_applied = False
+        self._simkl_resume_playback_observed = False
+        self._simkl_playback_delete_attempted = False
+        self._trakt_resume_applied = False
+        self._trakt_resume_playback_observed = False
+        self._trakt_playback_delete_attempted = False
+        self.playback_session_id = ""
+        self._was_superseded = False
 
-    def run(self, data={}):
+    def _activate_playback_session(self):
+        self.playback_session_id = uuid4().hex
+        self.data["playback_session_id"] = self.playback_session_id
+        set_property(ACTIVE_PLAYER_SESSION_PROPERTY, self.playback_session_id)
+        clear_property(PLAYNEXT_ACTION_PROPERTY)
+        kodilog(f"[PLAYER] Activated playback session {self.playback_session_id[:8]}")
+
+    def _owns_playback_session(self) -> bool:
+        return bool(self.playback_session_id) and (
+            get_property(ACTIVE_PLAYER_SESSION_PROPERTY) == self.playback_session_id
+        )
+
+    def _consume_next_dialog_action(self) -> bool:
+        raw_action = get_property(PLAYNEXT_ACTION_PROPERTY)
+        if not raw_action:
+            return False
+        try:
+            payload = loads(raw_action)
+        except (TypeError, ValueError):
+            kodilog(f"[PLAYNEXT] Ignoring unscoped action payload: {raw_action!r}")
+            return False
+        if not isinstance(payload, dict):
+            return False
+        if payload.get("action") != "next_episode":
+            return False
+        if payload.get("session_id") != self.playback_session_id:
+            return False
+        clear_property(PLAYNEXT_ACTION_PROPERTY)
+        return True
+
+    def _release_playback_session(self):
+        if not self._owns_playback_session():
+            return
+        clear_property(PLAYNEXT_ACTION_PROPERTY)
+        clear_property(ACTIVE_PLAYER_SESSION_PROPERTY)
+
+    def run(self, data=None):
+        if data is None:
+            data = {}
         self.set_constants(data)
+        self._activate_playback_session()
         self.clear_playback_properties()
-        self.add_external_trakt_scrolling()
+        if not self._is_trakt_tracking_excluded():
+            self.add_external_trakt_scrolling()
         self.mark_watched(data)
 
         close_busy_dialog()
+        kodilog(
+            f"[PLAYER] run() started: url_type={'plugin' if self.url.startswith('plugin://') else 'direct'}, "
+            f"mode={data.get('mode')}, url_start={self.url[:80]}"
+        )
 
         try:
             self.list_item = make_listing(data)
             self.PLAYLIST.add(self.url, self.list_item)
-            if self.data["mode"] == "tv":
-                self.build_playlist()
             self.play_video(self.list_item)
         except Exception as e:
             self.run_error(e)
+
+        if self._was_superseded:
+            kodilog("[PLAYER] run() superseded; skipping PlayNext queue drain")
+            return
+
+        had_nextep = self._drain_nextep_queue()
+        kodilog(f"[PLAYER] _drain_nextep_queue returned had_nextep={had_nextep}")
+        kodilog("[PLAYER] run() completed")
+
+    def _drain_nextep_queue(self) -> bool:
+        """Process queued next episodes after current video has stopped"""
+        from lib.utils.kodi.settings import auto_play_enabled as _auto_play_enabled
+
+        if not JacktookPLayer._nextep_queue:
+            return False
+
+        while JacktookPLayer._nextep_queue:
+            entry = JacktookPLayer._nextep_queue.pop(0)
+            data = entry.get("data", {})
+            results = entry.get("results")
+            kodilog(
+                f"[PLAYNEXT] _drain_nextep_queue: "
+                f"title={data.get('title', '')}, "
+                f"has_results={results is not None}, "
+                f"queue_remaining={len(JacktookPLayer._nextep_queue)}"
+            )
+
+            if _auto_play_enabled() or results is None:
+                # This is an internal handoff after the previous plugin action
+                # has already finished resolving. setResolvedUrl() no longer has
+                # a pending Kodi request to answer, so mark the new playback for
+                # an explicit Player.play() call.
+                handoff_data = dict(data)
+                handoff_data["direct_playback_handoff"] = True
+                player = JacktookPLayer()
+                player.run(data=handoff_data)
+                del player
+            else:
+                # Manual: show source select (safe context — no video playing)
+                from lib.search import show_source_select as _show_source_select
+
+                resolved = _show_source_select(
+                    results,
+                    mode=data.get("mode", "tv"),
+                    ids=data.get("ids", {}),
+                    tv_data=data.get("tv_data", {}),
+                    query=data.get("query", ""),
+                    media_type=data.get("media_type", ""),
+                    rescrape=False,
+                    direct=False,
+                    autoplay_context=str(AUTOPLAY_CONTEXT_NEXT_EPISODE),
+                )
+                kodilog(f"[PLAYNEXT] source_select returned resolved={resolved}")
+                if not resolved:
+                    kodilog("[PLAYNEXT] source_select cancelled; cleanup only")
+                    close_busy_dialog()
+                    close_all_dialog()
+                    clear_property("jacktook_next_dialog_action")
+                    try:
+                        self.PLAYLIST.clear()
+                    except Exception as e:
+                        kodilog(f"[PLAYNEXT] failed clearing playlist after cancel: {e}")
+
+        return True
 
     def play_video(self, list_item):
         close_busy_dialog()
@@ -86,18 +223,30 @@ class JacktookPLayer(xbmc.Player):
 
         try:
             self._handle_trakt_scrobble(list_item)
+            self._handle_simkl_scrobble()
             self.handle_subtitles(list_item)
-            setResolvedUrl(ADDON_HANDLE, True, list_item)
+            if self.url.startswith(("http://", "https://", "file://")):
+                list_item.setPath(self.url)
+            if self.data.get("direct_playback_handoff"):
+                # The original plugin resolution has already completed. Start
+                # the queued external-plugin URL explicitly instead of trying
+                # to resolve a stale addon handle.
+                kodilog("[PLAYER] play_video: calling Player.play for internal PlayNext handoff")
+                self.play(self.url, list_item)
+            else:
+                # Normal plugin entry point: answer Kodi's pending resolution.
+                # Calling Player.play() here as well would open the stream twice.
+                setResolvedUrl(get_addon_handle(), True, list_item)
+                kodilog("[PLAYER] play_video: calling setResolvedUrl only")
             self.monitor()
+            kodilog("[PLAYER] play_video: monitor() returned")
         except Exception as e:
             kodilog(f"Error during play_video: {e}")
             self.run_error(e)
 
     def _check_volume(self):
         try:
-            if not get_setting("volume_check_enabled") or get_visibility(
-                "Player.Muted"
-            ):
+            if not get_setting("volume_check_enabled") or get_visibility("Player.Muted"):
                 return True
 
             threshold = int(get_setting("volume_check_threshold", 50))
@@ -126,52 +275,129 @@ class JacktookPLayer(xbmc.Player):
             return True
 
     def _handle_trakt_scrobble(self, list_item):
-        if (
-            is_trakt_auth()
-            and get_setting("trakt_scrobbling_enabled")
-            and self.data.get("ids")
-        ):
-            last_position = TraktAPI().scrobble.trakt_get_last_tracked_position(
-                self.data
-            )
+        if self._is_trakt_tracking_excluded():
+            return
+        if is_trakt_auth() and get_setting("trakt_scrobbling_enabled") and self.data.get("ids"):
+            try:
+                last_position = TraktAPI().scrobble.trakt_get_last_tracked_position(self.data)
+            except Exception as e:
+                self._log_trakt_playback_failure("resume lookup", e)
+                last_position = 0
             if last_position > 0:
                 list_item.setProperty("StartPercent", str(last_position))
-            TraktAPI().scrobble.trakt_start_scrobble(self.data)
-            self._is_trakt_scrobble_active = True
+                self.playback_started_properly = True
+            try:
+                TraktAPI().scrobble.trakt_start_scrobble(self.data)
+                self._is_trakt_scrobble_active = True
+            except Exception as e:
+                self._log_trakt_playback_failure("start scrobble", e)
 
     def _is_trakt_scrobble_enabled(self):
         return (
-            self._is_trakt_scrobble_active
+            not self._is_trakt_tracking_excluded()
+            and self._is_trakt_scrobble_active
             and is_trakt_auth()
             and get_setting("trakt_scrobbling_enabled")
-            and self.data.get("ids")
         )
+
+    def _handle_simkl_scrobble(self):
+        try:
+            if self._is_simkl_tracking_excluded() or not is_simkl_scrobbling_enabled():
+                return
+            self._is_simkl_scrobble_active = self._queue_simkl_scrobble("start")
+        except Exception as error:
+            self._is_simkl_scrobble_active = False
+            kodilog(f"[SIMKL] start setup failed; continuing playback ({type(error).__name__})")
+
+    def _is_simkl_scrobble_enabled(self):
+        try:
+            return (
+                getattr(self, "_is_simkl_scrobble_active", False)
+                and not self._is_simkl_tracking_excluded()
+                and is_simkl_scrobbling_enabled()
+            )
+        except Exception as error:
+            kodilog(f"[SIMKL] state check failed; continuing playback ({type(error).__name__})")
+            return False
+
+    def _queue_simkl_scrobble(self, action):
+        try:
+            data = {
+                "mode": self.data.get("mode"),
+                "ids": dict(self.data.get("ids") or {}),
+                "tv_data": dict(self.data.get("tv_data") or {}),
+                "progress": self.data.get("progress", 0),
+            }
+            thread = Thread(target=self._send_simkl_scrobble, args=(action, data))
+            thread.daemon = True
+            thread.start()
+            return True
+        except Exception as error:
+            kodilog(f"[SIMKL] {action} queue failed; continuing playback ({type(error).__name__})")
+            return False
+
+    @staticmethod
+    def _send_simkl_scrobble(action, data):
+        try:
+            SimklClient().scrobble(action, data)
+        except Exception as error:
+            kodilog(f"[SIMKL] {action} failed; continuing playback ({type(error).__name__})")
 
     def handle_trakt_pause_resume(self):
         is_paused = bool(get_visibility("Player.Paused"))
-
-        if not self._is_trakt_scrobble_enabled():
-            self._playback_was_paused = is_paused
-            return
-
         if is_paused and not self._playback_was_paused:
-            TraktAPI().scrobble.trakt_pause_scrobble(self.data)
+            if self._is_trakt_scrobble_enabled():
+                try:
+                    TraktAPI().scrobble.trakt_pause_scrobble(self.data)
+                except Exception as e:
+                    self._log_trakt_playback_failure("pause scrobble", e)
+            if self._is_simkl_scrobble_enabled():
+                self._queue_simkl_scrobble("pause")
         elif self._playback_was_paused and not is_paused:
-            TraktAPI().scrobble.trakt_start_scrobble(self.data)
+            if self._is_trakt_scrobble_enabled():
+                try:
+                    TraktAPI().scrobble.trakt_start_scrobble(self.data)
+                except Exception as e:
+                    self._log_trakt_playback_failure("resume scrobble", e)
+            if self._is_simkl_scrobble_enabled():
+                self._queue_simkl_scrobble("start")
 
         self._playback_was_paused = is_paused
 
     def monitor(self):
         ensure_dialog_closed = False
+        plugin_start_wait_ms = 0
+        start_failure_notified = False
+        kodilog("[PLAYER] monitor() entered")
 
         try:
             while not self.isPlayingVideo():
+                if not self._owns_playback_session():
+                    self._was_superseded = True
+                    kodilog("[PLAYER] monitor superseded while waiting for playback")
+                    return
                 if self.kodi_monitor.abortRequested():
+                    kodilog("[PLAYER] monitor: abort requested while waiting for video to start")
                     return
                 if get_visibility("Window.IsTopMost(okdialog)"):
                     execute_builtin("SendClick(okdialog, 11)")
+                    if self._is_queued_plugin_url():
+                        self.notify_playback_never_started()
                     return
-                sleep(100)
+                plugin_start_wait_ms += PLUGIN_START_POLL_INTERVAL_MS
+                if (
+                    not start_failure_notified
+                    and self._plugin_start_failure_detected(plugin_start_wait_ms)
+                ):
+                    start_failure_notified = True
+                    kodilog(
+                        f"[PLAYER] playback did not start within "
+                        f"{PLUGIN_START_FAILURE_TIMEOUT_MS}ms and no resolution is in progress",
+                        level=xbmc.LOGWARNING,
+                    )
+                    self.notify_playback_never_started()
+                sleep(PLUGIN_START_POLL_INTERVAL_MS)
+            kodilog("[PLAYER] monitor: video started playing, entering main loop")
 
             # Once playing, initialize streams and subtitles
             self.select_audio_stream()
@@ -183,6 +409,12 @@ class JacktookPLayer(xbmc.Player):
                 introdb_thread = Thread(target=self.fetch_introdb_segments)
                 introdb_thread.daemon = True
                 introdb_thread.start()
+            else:
+                kodilog(
+                    "Skip intro: background fetch not started "
+                    f"(enabled={self.skip_intro_enabled}, mode={self.data.get('mode')})",
+                    level=xbmc.LOGINFO,
+                )
 
             # Fetch stinger info in background if enabled
             if get_setting("stinger_notifications_enabled") and self.data.get("mode") == "movies":
@@ -192,6 +424,10 @@ class JacktookPLayer(xbmc.Player):
 
             # Monitor loop
             while self.isPlayingVideo():
+                if not self._owns_playback_session():
+                    self._was_superseded = True
+                    kodilog("[PLAYER] monitor superseded by a newer playback session")
+                    return
                 self.update_playback_progress()
                 self.handle_trakt_pause_resume()
                 self.check_autoscrape_threshold()
@@ -200,23 +436,39 @@ class JacktookPLayer(xbmc.Player):
                     ensure_dialog_closed = True
                     self.playback_close_dialogs()
 
+                self.check_next_dialog()
                 self.check_skip_intro()
                 self.check_stinger_notification()
-                self.check_next_dialog()
+
+                # Handle pending next-episode action from dialog
+                if self._consume_next_dialog_action():
+                    self._handle_next_dialog_action()
+
                 sleep(1000)
 
             self.handle_playback_stop()
+            kodilog("[PLAYER] monitor: main loop exited, handle_playback_stop completed")
 
-        except Exception as e:
+        except Exception:
             self.kill_dialog()
         finally:
-            self._cleanup_playback_session()
-            self.clear_playback_properties()
+            if self._owns_playback_session():
+                kodilog("[PLAYER] monitor: owner cleanup for playback session")
+                self.clear_playback_properties()
+                self._release_playback_session()
+            else:
+                kodilog("[PLAYER] monitor: superseded session; skipping global cleanup")
+        kodilog("[PLAYER] monitor: exiting")
 
     def handle_subtitles(self, list_item):
+        # Skip subtitle handling during autoplay unless subtitles can be handled without dialogs.
+        if self.data.get("autoplay") and not self.data.get("stream_subtitles"):
+            kodilog("Autoplay mode: skipping subtitle handling")
+            return
+
         self.subtitles_found = False
         subtitles_path = self.data.get("subtitles_path", [])
-        if subtitles_path or get_setting("search_subtitles"):
+        if subtitles_path or get_property("search_subtitles"):
             list_item.setSubtitles(subtitles_path)
             self.setSubtitleStream(0)
             self.subtitles_found = True
@@ -224,8 +476,9 @@ class JacktookPLayer(xbmc.Player):
             try:
                 from lib.clients.subtitle.submanager import SubtitleManager
 
+                auto_select = self.data.get("autoplay") or subtitle_automation_enabled()
                 subtitle_manager = SubtitleManager(self.data, self.notification)
-                subs_paths = subtitle_manager.fetch_subtitles(auto_select=True)
+                subs_paths = subtitle_manager.fetch_subtitles(auto_select=auto_select)
                 if not subs_paths:
                     kodilog("No subtitles found, skipping subtitle loading")
                     self.subtitles_found = False
@@ -236,7 +489,7 @@ class JacktookPLayer(xbmc.Player):
             except Exception as e:
                 kodilog(f"Error loading subtitles: {e}")
                 self.subtitles_found = False
-        elif get_setting("auto_subtitle_selection"):
+        elif subtitle_automation_enabled():
             sub_language = str(get_setting("subtitle_language"))
             if sub_language and sub_language.lower() != "None":
                 self.lang_code = get_language_code(sub_language)
@@ -247,25 +500,32 @@ class JacktookPLayer(xbmc.Player):
         """
         Handles subtitle activation and selection logic after playback starts.
         """
-        auto_select_enabled = get_setting("auto_subtitle_selection")
+        auto_select_enabled = subtitle_automation_enabled()
         stremio_subtitle_enabled = get_setting("stremio_subtitle_enabled")
-        search_subtitles = get_setting("search_subtitles")
-        
+        search_subtitles = get_property("search_subtitles")
         if self.subtitles_found or stremio_subtitle_enabled or search_subtitles:
             self.showSubtitles(True)
             if self.subtitles_found:
                 self.notification(translation(90257), time=2000)
-                set_property("search_subtitles", "false")
-                return
+                clear_property("search_subtitles")
+
+                # Auto-select subtitle by language if enabled (runs BEFORE return)
+                if auto_select_enabled:
+                    _, _, subtitles = self.get_player_streams()
+                    kodilog(f"Available subtitles: {subtitles}", level=xbmc.LOGDEBUG)
+                    for sub in subtitles:
+                        if self.lang_code == sub.get("language") and sub.get("isforced") is False:
+                            self.setSubtitleStream(sub["index"])
+                            self.showSubtitles(True)
+                            break
+
+            return
 
         if auto_select_enabled:
             _, _, subtitles = self.get_player_streams()
             kodilog(f"Available subtitles: {subtitles}", level=xbmc.LOGDEBUG)
             for sub in subtitles:
-                if (
-                    self.lang_code == sub.get("language")
-                    and sub.get("isforced") is False
-                ):
+                if self.lang_code == sub.get("language") and sub.get("isforced") is False:
                     self.setSubtitleStream(sub["index"])
                     self.showSubtitles(True)
                     break
@@ -280,11 +540,7 @@ class JacktookPLayer(xbmc.Player):
         """
         auto_audio_enabled = get_setting("auto_audio")
         auto_audio_language = str(get_setting("auto_audio_language"))
-        if (
-            auto_audio_enabled
-            and auto_audio_language
-            and auto_audio_language.lower() != "none"
-        ):
+        if auto_audio_enabled and auto_audio_language and auto_audio_language.lower() != "none":
             sleep(500)
             audio_streams = self.getAvailableAudioStreams()
             if audio_streams or len(audio_streams) > 0:
@@ -293,6 +549,23 @@ class JacktookPLayer(xbmc.Player):
                     if stream_lang == lang_code:
                         self.setAudioStream(audio_streams.index(stream_lang))
                         break
+
+    def _is_queued_plugin_url(self) -> bool:
+        return str(self.url or "").startswith("plugin://")
+
+    def _plugin_start_failure_detected(self, wait_ms: int) -> bool:
+        """Return True when a queued plugin:// URL has silently failed to start."""
+        if not self._is_queued_plugin_url():
+            return False
+        if wait_ms < PLUGIN_START_FAILURE_TIMEOUT_MS:
+            return False
+        return not get_visibility("Window.IsVisible(busydialog)")
+
+    def notify_playback_never_started(self):
+        try:
+            notification(translation(91059), time=5000)
+        except Exception as e:
+            kodilog(f"Error notifying playback start failure: {e}")
 
     def handle_playback_failure(self):
         self.kill_dialog()
@@ -305,6 +578,9 @@ class JacktookPLayer(xbmc.Player):
             if self.getTotalTime() not in total_time_errors and get_visibility(
                 video_fullscreen_check
             ):
+                self._apply_simkl_resume()
+                self._apply_trakt_resume()
+                self._apply_nuvio_resume()
                 if self.on_started:
                     self.on_started()
         except Exception as e:
@@ -315,12 +591,12 @@ class JacktookPLayer(xbmc.Player):
             self.total_time = self.getTotalTime()
             self.current_time = self.getTime()
             if self.total_time and self.total_time > 0:
-                self.watched_percentage = round(
-                    float(self.current_time / self.total_time * 100), 1
-                )
+                self.watched_percentage = round(float(self.current_time / self.total_time * 100), 1)
                 self.data["progress"] = self.watched_percentage
                 self.data["current_time"] = self.current_time
                 self.data["total_time"] = self.total_time
+                self._simkl_resume_playback_observed = True
+                self._trakt_resume_playback_observed = True
         except Exception as e:
             kodilog(f"Error updating playback progress: {e}")
 
@@ -330,7 +606,7 @@ class JacktookPLayer(xbmc.Player):
                 return
             if not getattr(self, "current_time", None):
                 return
-            if not getattr(self, "autoscrape_started", False) is False:
+            if getattr(self, "autoscrape_started", False) is not False:
                 return
             if not get_setting("autoscrape_next_episode", False):
                 return
@@ -340,134 +616,674 @@ class JacktookPLayer(xbmc.Player):
             threshold = int(get_setting("autoscrape_threshold", 70))
             if self.current_time >= (self.total_time * threshold / 100):
                 self.autoscrape_started = True
-                tv_data = self.data.get("tv_data", {})
-                season = tv_data.get("season")
-                episode = tv_data.get("episode")
-                if season is None or episode is None:
+                next_tv_data = self._get_next_episode_data()
+                if not next_tv_data:
                     return
-
-                next_tv_data = {
-                    "season": season,
-                    "episode": episode + 1,
-                    "name": "",
-                }
                 thread = Thread(target=autoscrape_next_episode, args=(self.data, next_tv_data))
                 thread.daemon = True
                 thread.start()
         except Exception as e:
             kodilog(f"Error in check_autoscrape_threshold: {e}")
 
+    def _skip_segment_types(self):
+        segment_types = ["recap", "intro"]
+        if self.skip_credits_enabled:
+            segment_types.append("outro")
+        return segment_types
+
+    def _skip_segment_window_active(self):
+        """True while playback sits inside a skip segment window.
+
+        With manual skip (auto off) the skip dialog owns the screen for the
+        whole window, so end-of-episode dialogs must defer to it. All skip
+        state is read defensively: players built outside ``set_constants``
+        (tests, alternative constructors) never had skip state.
+        """
+        if getattr(self, "skip_intro_auto", True) or not getattr(self, "skip_intro_segments", None):
+            return False
+        handled = getattr(self, "skip_intro_handled", None) or {}
+        segments = self.skip_intro_segments
+
+        current_ms = int((getattr(self, "current_time", 0) or 0) * 1000)
+        if not current_ms:
+            return False
+
+        segment_types = ["recap", "intro"]
+        if getattr(self, "skip_credits_enabled", False):
+            segment_types.append("outro")
+
+        for segment_type in segment_types:
+            if handled.get(segment_type):
+                continue
+
+            segment = segments.get(segment_type)
+            if not segment:
+                continue
+
+            start_ms = segment.get("start_ms") or 0
+            end_ms = segment.get("end_ms")
+            if end_ms is None:
+                total_time = getattr(self, "total_time", 0) or 0
+                if total_time <= 0:
+                    continue
+                end_ms = int(total_time * 1000)
+
+            if start_ms <= current_ms <= end_ms:
+                return True
+
+        return False
+
     def check_next_dialog(self):
         try:
+            # Only show PlayNext for TV series, never for movies
+            if self.data.get("mode") != "tv":
+                return
+
             if not getattr(self, "total_time", None) or self.total_time < 60:
                 return
             if not getattr(self, "current_time", None):
                 return
-
-            # Stale data check: if getTime() is very high but we just started, skip
             if not getattr(self, "playback_started_properly", False):
                 if self.current_time < 10:
                     self.playback_started_properly = True
                 else:
                     return
-
             if self.current_time < (self.total_time * 0.5):
-                # Don't trigger in the first 50% of playback as a safety measure
+                return
+            if self._skip_segment_window_active():
+                # The skip dialog owns the screen while its window is active;
+                # PlayNext fires once the window resolves (skip clicked,
+                # auto-closed or passed).
                 return
 
-            time_left = int(self.total_time) - int(self.current_time)
-            if self.next_dialog and time_left <= self.playing_next_time:
-                xbmc.executebuiltin(
-                    action_url_run(name="run_next_dialog", item_info=self.data)
-                )
-                self.next_dialog = False
+            use_percentage = get_setting("playnext_use_percentage", False)
+            if use_percentage:
+                percentage = int(get_setting("playnext_percentage", 95))
+                if self.next_dialog and self.watched_percentage >= percentage:
+                    self._open_next_dialog()
+            else:
+                time_left = int(self.total_time) - int(self.current_time)
+                if self.next_dialog and time_left <= self.playing_next_time:
+                    self._open_next_dialog()
         except Exception as e:
             kodilog(f"Error in check_next_dialog: {e}")
 
-    def handle_playback_stop(self):
-        if self._is_trakt_scrobble_enabled():
-            TraktAPI().scrobble.trakt_stop_scrobble(self.data)
-            self._is_trakt_scrobble_active = False
+    def _open_next_dialog(self):
+        """Open PlayNext with one resolved next episode payload."""
+        try:
+            next_tv_data = self._get_next_episode_data()
+        except Exception as e:
+            kodilog(f"[PLAYNEXT] Failed resolving next_tv_data for dialog: {e}")
+            next_tv_data = None
+        item_info = dict(self.data)
+        if self._is_valid_next_tv_data(next_tv_data):
+            self.data["next_tv_data"] = next_tv_data
+            item_info["next_tv_data"] = next_tv_data
+        xbmc.executebuiltin(action_url_run(name="run_next_dialog", item_info=item_info))
+        self.next_dialog = False
 
-        # Persist playback progress
-        set_watched_file(self.data)
+    def _is_valid_next_tv_data(self, next_tv_data) -> bool:
+        """Return True when next_tv_data identifies a positive non-current episode."""
+        if not isinstance(next_tv_data, dict):
+            return False
+        try:
+            season = int(next_tv_data.get("season"))
+            episode = int(next_tv_data.get("episode"))
+        except (TypeError, ValueError):
+            return False
+        if season <= 0 or episode <= 0:
+            return False
 
-        close_busy_dialog()
+        current_tv_data = self.data.get("tv_data") or {}
+        try:
+            current_season = int(current_tv_data.get("season"))
+            current_episode = int(current_tv_data.get("episode"))
+        except (TypeError, ValueError):
+            return True
+        return (season, episode) != (current_season, current_episode)
 
-    def build_playlist(self):
+    def _authoritative_next_tv_data(self):
+        """Prefer dialog/player next_tv_data, falling back to recalculation."""
+        next_tv_data = self.data.get("next_tv_data")
+        if self._is_valid_next_tv_data(next_tv_data):
+            kodilog(f"[PLAYNEXT] Using authoritative next_tv_data {next_tv_data}")
+            return next_tv_data
+
+        next_tv_data = self._get_next_episode_data()
+        kodilog(f"[PLAYNEXT] _get_next_episode_data returned {next_tv_data}")
+        if self._is_valid_next_tv_data(next_tv_data):
+            self.data["next_tv_data"] = next_tv_data
+            return next_tv_data
+        return None
+
+    def _check_still_watching_threshold(self) -> bool:
+        """Check consecutive autoplay count and prompt 'Still Watching?' dialog.
+
+        Returns True if the user stopped (caller should abort), False to continue.
+        """
+        threshold = int(get_setting("playnext_threshold", 0))
+        if threshold <= 0:
+            return False
+
+        count_str = get_property("jacktook_consecutive_autoplays")
+        try:
+            count = int(count_str) if count_str else 1
+        except (ValueError, TypeError):
+            count = 1
+
+        if count >= threshold:
+            from xbmcgui import Dialog
+
+            confirmed = Dialog().yesno(
+                "Still watching?",
+                "You've watched several episodes in a row. Continue?",
+                yeslabel="Continue",
+                nolabel="Stop",
+            )
+            if not confirmed:
+                clear_property("jacktook_consecutive_autoplays")
+                clear_property("jacktook_next_dialog_action")
+                return True
+            count = 1
+        else:
+            count += 1
+
+        set_property("jacktook_consecutive_autoplays", str(count))
+        return False
+
+    def _queue_elementum_pack_next(self, next_tv_data: dict) -> bool:
+        """Queue the next episode from the currently selected Elementum pack."""
+        next_data = build_elementum_pack_next_playback(self.data, next_tv_data)
+        if not next_data:
+            return False
+
+        JacktookPLayer._nextep_queue.append({"data": next_data})
+        kodilog(
+            f"[PLAYNEXT] Queued same Elementum pack for "
+            f"S{next_tv_data.get('season')}E{next_tv_data.get('episode')}"
+        )
+        self.stop()
+        clear_property("jacktook_next_dialog_action")
+        return True
+
+    def _queue_from_autoscrape_cache(self, next_tv_data: dict, ids: dict) -> bool:
+        """Queue resolved autoplay data or raw results for manual selection."""
+        id_value = ids.get("original_id") or ids.get("imdb_id") or ids.get("tmdb_id")
+        if id_value is None:
+            return False
+
+        cache_key = get_autoscrape_cache_key(
+            id_value, next_tv_data.get("season"), next_tv_data.get("episode")
+        )
+        results_cache_key = get_autoscrape_results_cache_key(
+            id_value, next_tv_data.get("season"), next_tv_data.get("episode")
+        )
+
+        from lib.utils.kodi.settings import auto_play_enabled
+
+        if auto_play_enabled():
+            cached_data = cache.get(cache_key)
+            if not cached_data:
+                kodilog(f"[PLAYNEXT] Autoscrape resolved cache MISS for key={cache_key}")
+                return False
+
+            entry_data = dict(cached_data)
+            entry_data["autoplay"] = True
+            entry_data["playnext_context"] = True
+            JacktookPLayer._nextep_queue.append({"data": entry_data})
+            kodilog("[PLAYNEXT] Queued autoplay from cache, stopping player")
+        else:
+            cached_results = cache.get(results_cache_key)
+            if not cached_results:
+                kodilog(f"[PLAYNEXT] Autoscrape results cache MISS for key={results_cache_key}")
+                return False
+
+            entry_data = {
+                "mode": self.data.get("mode", "tv"),
+                "ids": ids,
+                "tv_data": next_tv_data,
+                "return_tv_data": self.data.get("tv_data", {}),
+                "query": self.data.get("title", ""),
+                "media_type": self.data.get("media_type", ""),
+                "playnext_context": True,
+            }
+            JacktookPLayer._nextep_queue.append(
+                {
+                    "data": entry_data,
+                    "results": cached_results,
+                }
+            )
+            kodilog(
+                f"[PLAYNEXT] Queued manual source select from cache "
+                f"({len(cached_results)} sources), stopping player"
+            )
+
+        self.stop()
+        clear_property("jacktook_next_dialog_action")
+        return True
+
+    def _handle_next_dialog_action(self):
+        """Handle PlayNext using the dialog's logical next episode as authority.
+
+        Kodi's PLAYLIST may still exist for playback mechanics, but it must not
+        decide the PlayNext target here: a stale playlist item can drift from
+        the `next_tv_data` shown by the dialog. Resolve the logical next episode
+        first, then queue it from cache or via the silent background search.
+        """
+        kodilog(
+            f"[PLAYNEXT] _handle_next_dialog_action:"
+            f" tv_data={self.data.get('tv_data')},"
+            f" ids={self.data.get('ids')}"
+        )
+
+        if self._check_still_watching_threshold():
+            return
+
+        next_tv_data = self._authoritative_next_tv_data()
+        if not next_tv_data:
+            clear_property("jacktook_next_dialog_action")
+            return
+
+        ids = self.data.get("ids", {})
+
+        # An explicit PlayNext click may reuse the exact pack selected by the
+        # user. This is intentionally independent from global autoplay.
+        if self._queue_elementum_pack_next(next_tv_data):
+            return
+
+        # Prefer the logical PlayNext queue paths over Kodi PLAYLIST advance.
+        # PLAYLIST fallback is intentionally not consulted before next_tv_data.
+        if self._queue_from_autoscrape_cache(next_tv_data, ids):
+            return  # Cache hit → queued → player.stop() called
+
+        # No cache: fire silent background search thread for the same target.
+        kodilog("[PLAYNEXT] No cache, firing silent background search")
+        item_data = {
+            "ids": ids,
+            "title": self.data.get("title", ""),
+            "mode": self.data.get("mode", ""),
+            "media_type": self.data.get("media_type", ""),
+        }
+        Thread(target=self._background_search_and_queue, args=(item_data, next_tv_data)).start()
+        clear_property("jacktook_next_dialog_action")
+
+    def _background_search_and_queue(self, item_data: dict, next_tv_data: dict) -> None:
+        """Search silently in background, queue result, then stop player"""
+        from lib.utils.player.utils import autoscrape_next_episode
+
+        try:
+            kodilog("[PLAYNEXT] Background search starting (silent)")
+            autoscrape_next_episode(item_data, next_tv_data, force=True)
+            kodilog("[PLAYNEXT] Background search complete, checking cache")
+
+            ids = item_data.get("ids", {})
+            # Check cache again — autoscrape_next_episode populates it
+            self._queue_from_autoscrape_cache(next_tv_data, ids)
+        except Exception as e:
+            kodilog(f"[PLAYNEXT] Background search error: {e}")
+
+    def _validate_next_episode_inputs(self):
+        """Validate that we have the data needed to find the next episode.
+
+        Returns (tmdb_id, season, episode) or None.
+        """
         if self.data.get("mode") != "tv":
-            return
+            return None
 
-        ids = self.data.get("ids")
-        if not ids:
-            return
-
+        ids = self.data.get("ids") or {}
         tmdb_id = ids.get("tmdb_id")
         if not tmdb_id:
-            return
+            return None
 
-        details = tmdb_get("tv_details", tmdb_id)
-        tv_data = self.data.get("tv_data", {})
+        tv_data = self.data.get("tv_data") or {}
         season = tv_data.get("season")
         episode = tv_data.get("episode")
-
         if season is None or episode is None:
-            return
+            return None
 
+        try:
+            season = int(season)
+            episode = int(episode)
+        except (TypeError, ValueError):
+            return None
+
+        return tmdb_id, season, episode
+
+    def _fetch_season_episodes(self, tmdb_id: str, season: int) -> Optional[list]:
+        """Fetch episode list for a given season from TMDB. Returns list or None."""
         season_details = tmdb_get("season_details", {"id": tmdb_id, "season": season})
-
         if not season_details or not hasattr(season_details, "episodes"):
+            return None
+        episodes = getattr(season_details, "episodes", [])
+        return episodes or None
+
+    def _advance_across_season_boundary(
+        self, tmdb_id: str, season: int, episode: int, episodes: list, tv_details
+    ) -> Optional[tuple]:
+        """Calculate the next episode position, crossing season boundary if needed.
+
+        Returns (next_season, next_episode, search_episodes) or None if at series end.
+        """
+        max_episode = max(
+            (getattr(ep, "episode_number", 0) for ep in episodes),
+            default=0,
+        )
+
+        next_season = season
+        next_episode = episode + 1
+
+        if episode < max_episode:
+            return next_season, next_episode, episodes
+
+        # Season boundary: advance to next season
+        # TMDB's number_of_seasons INCLUDES season 0 (specials), so we count
+        # only seasons with season_number > 0 from the seasons list instead.
+        all_seasons = getattr(tv_details, "seasons", None)
+        if all_seasons:
+            real_seasons = {
+                s.season_number for s in all_seasons if getattr(s, "season_number", 0) > 0
+            }
+            max_season = max(real_seasons) if real_seasons else 1
+        else:
+            max_season = getattr(tv_details, "number_of_seasons", 1) or 1
+        if season >= max_season:
+            return None
+
+        next_season = season + 1
+        next_episode = 1
+        next_episodes = self._fetch_season_episodes(tmdb_id, next_season)
+        if not next_episodes:
+            return None
+
+        return next_season, next_episode, next_episodes
+
+    def _find_next_episode_by_number(self, episodes: list, target_episode: int):
+        """Find episode by number, checking air_date is not in the future.
+
+        Returns the episode object or None.
+        """
+        for ep in episodes:
+            if getattr(ep, "episode_number", 0) != target_episode:
+                continue
+            air_date = getattr(ep, "air_date", None)
+            if air_date:
+                try:
+                    parts = air_date.split("-")
+                    ep_date = date(int(parts[0]), int(parts[1]), int(parts[2]))
+                    if date.today() < ep_date:
+                        return None
+                except (ValueError, IndexError):
+                    pass
+            return ep
+        return None
+
+    def _get_next_episode_data(self):
+        """Return next_tv_data dict for the next aired episode, or None."""
+        kodilog(
+            f"[PLAYNEXT] _get_next_episode_data: mode={self.data.get('mode')}, "
+            f"tv_data={self.data.get('tv_data')}, ids={self.data.get('ids')}"
+        )
+
+        inputs = self._validate_next_episode_inputs()
+        if not inputs:
+            kodilog("[PLAYNEXT] _get_next_episode_data: missing required inputs, returning None")
+            return None
+        tmdb_id, season, episode = inputs
+        kodilog(
+            f"[PLAYNEXT] _get_next_episode_data: tmdb_id={tmdb_id},"
+            f" season={season}, episode={episode}"
+        )
+
+        tv_details = tmdb_get("tv_details", tmdb_id)
+        if not tv_details:
+            kodilog("[PLAYNEXT] _get_next_episode_data: tv_details fetch failed, returning None")
+            return None
+
+        episodes = self._fetch_season_episodes(tmdb_id, season)
+        if not episodes:
+            kodilog(
+                "[PLAYNEXT] _get_next_episode_data: no episodes found for"
+                " current season, returning None"
+            )
+            return None
+
+        pos = self._advance_across_season_boundary(tmdb_id, season, episode, episodes, tv_details)
+        if not pos:
+            kodilog(
+                "[PLAYNEXT] _get_next_episode_data: at series end or"
+                " boundary fetch failed, returning None"
+            )
+            return None
+        next_season, next_episode, search_episodes = pos
+
+        next_ep = self._find_next_episode_by_number(search_episodes, next_episode)
+        if not next_ep:
+            kodilog(
+                "[PLAYNEXT] _get_next_episode_data: next episode not found"
+                " or not yet aired, returning None"
+            )
+            return None
+
+        result = {
+            "name": getattr(next_ep, "name", ""),
+            "episode": next_episode,
+            "season": next_season,
+        }
+        kodilog(f"[PLAYNEXT] _get_next_episode_data returning: {result}")
+        return result
+
+    def handle_playback_stop(self):
+        kodilog("[PLAYER] handle_playback_stop entered")
+        self._sync_yamtrack_watched()
+        self._queue_nuvio_progress_sync()
+        if self._is_trakt_scrobble_enabled():
+            try:
+                TraktAPI().scrobble.trakt_stop_scrobble(self.data)
+            except Exception as e:
+                self._log_trakt_playback_failure("stop scrobble", e)
+            self._is_trakt_scrobble_active = False
+        if getattr(self, "_is_simkl_scrobble_active", False):
+            if self._is_simkl_scrobble_enabled():
+                self._queue_simkl_scrobble("stop")
+            self._is_simkl_scrobble_active = False
+        self._delete_completed_simkl_playback()
+        self._delete_completed_trakt_playback()
+
+        if not self._is_trakt_tracking_excluded():
+            set_watched_file(self.data)
+
+        close_busy_dialog()
+        clear_property("jacktook_next_dialog_action")
+        kodilog("[PLAYER] handle_playback_stop completed")
+
+    def _queue_nuvio_progress_sync(self):
+        try:
+            if not is_nuvio_progress_sync_enabled():
+                return
+            data = dict(self.data)
+            data["ids"] = dict(self.data.get("ids") or {})
+            data["tv_data"] = dict(self.data.get("tv_data") or {})
+            thread = Thread(target=self._send_nuvio_progress, args=(data,))
+            thread.daemon = True
+            thread.start()
+        except Exception as error:
+            kodilog(
+                f"[NUVIO] playback sync queue failed; continuing playback ({type(error).__name__})"
+            )
+
+    @staticmethod
+    def _send_nuvio_progress(data):
+        try:
+            NuvioClient().push_watch_progress(data)
+        except Exception as error:
+            kodilog(f"[NUVIO] playback sync failed; continuing playback ({type(error).__name__})")
+
+    def _apply_nuvio_resume(self):
+        if getattr(self, "_nuvio_resume_applied", False):
+            return
+        try:
+            progress = float(self.data.get("nuvio_resume_percent"))
+            total_time = float(self.getTotalTime())
+        except (TypeError, ValueError):
+            return
+        if progress <= 0 or progress >= 95 or total_time <= 0:
+            return
+        try:
+            self.seekTime(total_time * progress / 100)
+            self.playback_started_properly = True
+            self._nuvio_resume_applied = True
+        except Exception as error:
+            kodilog(f"[NUVIO] resume seek failed; continuing playback ({type(error).__name__})")
+
+    def _apply_simkl_resume(self):
+        if getattr(self, "_simkl_resume_applied", False):
+            return
+        try:
+            progress = float(self.data.get("simkl_resume_progress"))
+            total_time = float(self.getTotalTime())
+        except (TypeError, ValueError):
+            return
+        if progress <= 0 or progress >= 100 or total_time <= 0:
+            return
+        try:
+            self.seekTime(total_time * progress / 100)
+            self.playback_started_properly = True
+            self._simkl_resume_applied = True
+        except Exception as error:
+            kodilog(f"[SIMKL] resume seek failed; continuing playback ({type(error).__name__})")
+
+    def _delete_completed_simkl_playback(self):
+        if getattr(self, "_simkl_playback_delete_attempted", False):
+            return
+        if not getattr(self, "_simkl_resume_playback_observed", False):
+            return
+        session_id = SimklClient._positive_integer(self.data.get("simkl_session_id"))
+        try:
+            completed = float(self.data.get("progress", 0)) >= 90
+        except (TypeError, ValueError):
+            completed = False
+        if not session_id or not completed:
+            return
+        self._simkl_playback_delete_attempted = True
+        thread = Thread(target=self._delete_simkl_playback, args=(session_id,))
+        thread.daemon = True
+        thread.start()
+
+    @staticmethod
+    def _delete_simkl_playback(session_id):
+        try:
+            SimklClient().delete_playback(session_id)
+        except Exception as error:
+            kodilog(f"[SIMKL] playback deletion failed; preserving resume ({type(error).__name__})")
+
+    def _apply_trakt_resume(self):
+        if getattr(self, "_trakt_resume_applied", False):
+            return
+        try:
+            progress = float(self.data.get("trakt_resume_progress"))
+            total_time = float(self.getTotalTime())
+        except (TypeError, ValueError):
+            return
+        if progress <= 0 or progress >= 80 or total_time <= 0:
+            return
+        try:
+            self.seekTime(total_time * progress / 100)
+            self.playback_started_properly = True
+            self._trakt_resume_applied = True
+        except Exception as error:
+            kodilog(f"Trakt resume seek failed; continuing playback ({type(error).__name__})")
+
+    def _delete_completed_trakt_playback(self):
+        if getattr(self, "_trakt_playback_delete_attempted", False):
+            return
+        if not getattr(self, "_trakt_resume_playback_observed", False):
+            return
+        playback_id = TraktScrobble._playback_positive_integer(self.data.get("trakt_playback_id"))
+        try:
+            completed = float(self.data.get("progress", 0)) >= 80
+        except (TypeError, ValueError):
+            completed = False
+        if not playback_id or not completed:
+            return
+        self._trakt_playback_delete_attempted = True
+        thread = Thread(target=self._delete_trakt_playback, args=(playback_id,))
+        thread.daemon = True
+        thread.start()
+
+    @staticmethod
+    def _delete_trakt_playback(playback_id):
+        try:
+            TraktAPI().scrobble.delete_playback(playback_id)
+        except Exception as error:
+            kodilog(f"Trakt playback deletion failed; preserving resume ({type(error).__name__})")
+
+    def _sync_yamtrack_watched(self):
+        if getattr(self, "_yamtrack_stop_attempted", False):
+            return
+        if self._is_live_tv() or self.data.get("is_informational_placeholder"):
+            return
+        try:
+            progress = float(self.data.get("progress") or 0)
+        except (TypeError, ValueError):
+            return
+        if progress < 90:
             return
 
-        for e in getattr(season_details, "episodes"):
-            episode_name = getattr(e, "name", "")
-            episode_number = getattr(e, "episode_number", 0)
+        self._yamtrack_stop_attempted = True
+        try:
+            from lib.clients.yamtrack import send_watched_state
 
-            if episode_number <= int(episode):
-                continue
+            send_watched_state(self.data)
+        except Exception as error:
+            kodilog(f"[YAMTRACK] Playback sync failed ({type(error).__name__})")
 
-            label = f"{season}x{episode_number}. {episode_name}"
-            next_tv_data = {
-                "name": episode_name,
-                "episode": episode_number,
-                "season": season,
-            }
+    def build_playlist(self):
+        next_tv_data = self._get_next_episode_data()
+        kodilog(f"[PLAYNEXT] build_playlist: next_tv_data={next_tv_data}")
+        if not next_tv_data:
+            return
 
-            if get_setting("autoscrape_next_episode", False):
-                url = build_url(
-                    "play_autoscraped",
-                    mode=self.data["mode"],
-                    query=getattr(details, "name", ""),
-                    ids=ids,
-                    tv_data=next_tv_data,
-                    preferred_group=self.preferred_group,
-                )
-            else:
-                url = build_url(
-                    "search",
-                    mode=self.data["mode"],
-                    query=getattr(details, "name", ""),
-                    ids=ids,
-                    tv_data=next_tv_data,
-                    rescrape=True,
-                    preferred_group=self.preferred_group,
-                )
+        ids = self.data.get("ids") or {}
+        episode_name = next_tv_data.get("name", "")
+        label = f"{next_tv_data.get('season')}x{next_tv_data.get('episode')}. {episode_name}"
+        query = self.data.get("title", "")
 
-            # Deduplication: Check if this URL is already in the playlist
-            is_in_playlist = False
-            for i in range(self.PLAYLIST.size()):
-                if self.PLAYLIST[i].getPath() == url:
-                    is_in_playlist = True
-                    break
+        if get_setting("autoscrape_next_episode", False):
+            url = build_url(
+                "play_autoscraped",
+                mode=self.data["mode"],
+                query=query,
+                ids=ids,
+                tv_data=next_tv_data,
+                preferred_group=self.preferred_group,
+                autoplay_context=str(AUTOPLAY_CONTEXT_NEXT_EPISODE),
+            )
+        else:
+            url = build_url(
+                "search",
+                mode=self.data["mode"],
+                query=query,
+                ids=ids,
+                tv_data=next_tv_data,
+                rescrape=True,
+                preferred_group=self.preferred_group,
+                autoplay_context=str(AUTOPLAY_CONTEXT_NEXT_EPISODE),
+                skip_cancel_on_back=True,
+            )
 
-            if is_in_playlist:
-                continue
+        # Deduplication: Check if this URL is already in the playlist
+        for i in range(self.PLAYLIST.size()):
+            if self.PLAYLIST[i].getPath() == url:
+                kodilog(f"[PLAYNEXT] build_playlist: duplicate URL, skipping: {url}")
+                return
 
-            list_item = ListItem(label=label)
-            list_item.setPath(url)
-            list_item.setProperty("IsPlayable", "true")
+        kodilog(f"[PLAYNEXT] build_playlist: adding to PLAYLIST label={label}, url={url}")
 
-            self.PLAYLIST.add(url=url, listitem=list_item)
+        list_item = ListItem(label=label)
+        list_item.setPath(url)
+        list_item.setProperty("IsPlayable", "true")
+
+        self.PLAYLIST.add(url=url, listitem=list_item)
 
     def kill_dialog(self):
         close_all_dialog()
@@ -477,6 +1293,8 @@ class JacktookPLayer(xbmc.Player):
 
     def set_constants(self, data):
         self.PLAYLIST.clear()
+        if not (data.get("playnext_context") or data.get("autoplay")):
+            clear_property("jacktook_consecutive_autoplays")
         self.data = data
         self.url = self.data["url"]
         self.watched_percentage = self.data.get("progress", 0.0)
@@ -486,7 +1304,13 @@ class JacktookPLayer(xbmc.Player):
         self.autoscrape_started = False
         self.next_dialog = get_setting("playnext_dialog_enabled")
         self._is_trakt_scrobble_active = False
+        self._is_simkl_scrobble_active = False
         self._playback_was_paused = False
+        self._yamtrack_stop_attempted = False
+        self._simkl_resume_applied = False
+        self._simkl_resume_playback_observed = False
+        self._simkl_playback_delete_attempted = False
+        self._was_superseded = False
         from lib.utils.general.utils import extract_release_group
 
         self.preferred_group = extract_release_group(self.data.get("title", ""))
@@ -494,8 +1318,9 @@ class JacktookPLayer(xbmc.Player):
         # Skip intro state
         self.skip_intro_enabled = get_setting("skip_intro_enabled")
         self.skip_intro_auto = get_setting("skip_intro_auto")
+        self.skip_credits_enabled = get_setting("skip_credits_enabled")
         self.skip_intro_segments = None
-        self.skip_intro_handled = {"intro": False, "recap": False}
+        self.skip_intro_handled = {"intro": False, "recap": False, "outro": False}
 
         # Stinger notification state
         self.stinger_notified = False
@@ -505,22 +1330,83 @@ class JacktookPLayer(xbmc.Player):
     def fetch_introdb_segments(self):
         """Fetch segment data from IntroDB in a background thread."""
         try:
-            ids = self.data.get("ids", {})
+            ids = self.data.get("ids", {}) or {}
             tv_data = self.data.get("tv_data", {})
-            imdb_id = ids.get("imdb_id")
             season = tv_data.get("season")
             episode = tv_data.get("episode")
 
-            if not imdb_id or not season or not episode:
-                kodilog("Skip intro: Missing IMDb ID, season, or episode")
+            if not any(ids.get(key) for key in ("tmdb_id", "tvdb_id", "imdb_id")):
+                kodilog("Skip intro: Missing media IDs for IntroDB lookup", level=xbmc.LOGINFO)
+                return
+            if not season or not episode:
+                kodilog("Skip intro: Missing season or episode", level=xbmc.LOGINFO)
                 return
 
             from lib.clients.introdb import get_segments
 
-            self.skip_intro_segments = get_segments(imdb_id, season, episode)
-            kodilog(f"IntroDB segments: {self.skip_intro_segments}")
+            self.skip_intro_segments = get_segments(ids, season, episode)
+            kodilog(f"IntroDB segments: {self.skip_intro_segments}", level=xbmc.LOGINFO)
+            self._merge_aniskip_segments(ids, season, episode)
         except Exception as e:
             kodilog(f"Error fetching IntroDB segments: {e}")
+
+    def _merge_aniskip_segments(self, ids, season, episode):
+        """Fetch and merge AniSkip intervals into the segments of an anime playback.
+
+        The anime signal is carried in the playback data by the search entry, so
+        non-anime playbacks never resolve an anime route. AniSkip needs the real
+        episode runtime in seconds (its API filters intervals by proximity to
+        it), so the fetch waits bounded for the player duration; without it the
+        IntroDB segments stand. Every step is best-effort: a failure keeps the
+        IntroDB result untouched and never touches playback.
+        """
+        try:
+            from lib.utils.general.utils import truthy_param
+
+            if not truthy_param(self.data.get("anime")):
+                return
+
+            from lib.anime.stream_target import resolve_anime_route
+
+            route = resolve_anime_route(ids, season, episode)
+            mal_id = getattr(route, "mal_id", None)
+            absolute = getattr(route, "absolute", None)
+            try:
+                mal_number = int(mal_id)
+                absolute_episode = int(absolute)
+            except (TypeError, ValueError):
+                mal_number, absolute_episode = 0, 0
+            if mal_number <= 0 or absolute_episode <= 0:
+                kodilog(
+                    "AniSkip: no usable anime route, keeping IntroDB segments",
+                    level=xbmc.LOGINFO,
+                )
+                return
+
+            total_time = 0.0
+            for _ in range(20):
+                total_time = getattr(self, "total_time", 0) or 0
+                if total_time > 0:
+                    break
+                time.sleep(1)
+            if total_time <= 0:
+                kodilog(
+                    "AniSkip: duration never known, keeping IntroDB segments",
+                    level=xbmc.LOGINFO,
+                )
+                return
+
+            from lib.anime.providers.aniskip import get_skip_times, merge_skip_segments
+
+            aniskip_segments = get_skip_times(mal_number, absolute_episode, int(total_time))
+            if not aniskip_segments:
+                return
+
+            merged = merge_skip_segments(self.skip_intro_segments, aniskip_segments)
+            self.skip_intro_segments = merged
+            kodilog(f"AniSkip merged segments: {sorted(merged)}", level=xbmc.LOGINFO)
+        except Exception as e:
+            kodilog(f"AniSkip merge failed: {e}")
 
     def check_skip_intro(self):
         try:
@@ -531,7 +1417,9 @@ class JacktookPLayer(xbmc.Player):
 
             current_ms = int(self.current_time * 1000)
 
-            for segment_type in ("recap", "intro"):
+            segment_types = self._skip_segment_types()
+
+            for segment_type in segment_types:
                 if self.skip_intro_handled.get(segment_type):
                     continue
 
@@ -539,28 +1427,54 @@ class JacktookPLayer(xbmc.Player):
                 if not segment:
                     continue
 
-                start_ms = segment.get("start_ms", 0)
-                end_ms = segment.get("end_ms", 0)
-                end_sec = segment.get("end_sec", end_ms / 1000)
+                start_ms = segment.get("start_ms") or 0
+                end_ms = segment.get("end_ms")
+
+                # v3 open boundary: a null end_ms means "until the end of the
+                # video"; resolve it against the runtime duration.
+                if end_ms is None:
+                    total_time = getattr(self, "total_time", 0) or 0
+                    if total_time <= 0:
+                        # Duration not known yet; retry on the next cycle.
+                        continue
+                    end_ms = int(total_time * 1000)
+
+                end_sec = end_ms / 1000.0
 
                 if start_ms <= current_ms <= end_ms:
                     self.skip_intro_handled[segment_type] = True
 
                     if self.skip_intro_auto:
+                        kodilog(
+                            f"Skip intro: auto-skipping {segment_type} at "
+                            f"{current_ms / 1000:.1f}s "
+                            f"(segment {start_ms / 1000:.1f}-{end_ms / 1000:.1f}s)",
+                            level=xbmc.LOGINFO,
+                        )
                         self.seekTime(end_sec)
                     else:
-                        label = (
-                            "Skip Intro" if segment_type == "intro" else "Skip Recap"
+                        kodilog(
+                            f"Skip intro: showing {segment_type} skip dialog at "
+                            f"{current_ms / 1000:.1f}s "
+                            f"(segment {start_ms / 1000:.1f}-{end_ms / 1000:.1f}s)",
+                            level=xbmc.LOGINFO,
                         )
+                        label = translation(SKIP_SEGMENT_LABEL_IDS.get(segment_type, 90160))
+                        resolved_segment = dict(segment)
+                        resolved_segment["end_ms"] = end_ms
+                        resolved_segment["end_sec"] = end_sec
                         xbmc.executebuiltin(
                             action_url_run(
                                 name="run_skip_intro_dialog",
-                                segment_data=json_dumps(segment),
+                                segment_data=json_dumps(resolved_segment),
                                 skip_label=label,
                             )
                         )
-                elif current_ms > end_ms:
-                    self.skip_intro_handled[segment_type] = True
+                # Deliberate: no "window already passed" lock. A playback that
+                # resumes past a segment must be able to re-arm its button
+                # when the user seeks back into the window; interactions that
+                # consume the window (skip, dismiss, auto-seek) already mark
+                # it handled above.
         except Exception as e:
             kodilog(f"Error in check_skip_intro: {e}")
 
@@ -611,11 +1525,13 @@ class JacktookPLayer(xbmc.Player):
         clear_property("script.trakt.ids")
 
     def add_external_trakt_scrolling(self):
-        ids = self.data.get("ids", {})
-        mode = self.data.get("mode")
-        title = self.data.get("title", "")
+        if self._is_trakt_tracking_excluded():
+            return
+        try:
+            ids = self.data.get("ids", {})
+            mode = self.data.get("mode")
+            title = self.data.get("title", "")
 
-        if ids:
             trakt_ids = {
                 "tmdb": ids.get("tmdb_id"),
                 "imdb": ids.get("imdb_id"),
@@ -624,16 +1540,19 @@ class JacktookPLayer(xbmc.Player):
             if mode == "tv":
                 trakt_ids["tvdb"] = ids.get("tvdb_id")
             set_property("script.trakt.ids", json_dumps(trakt_ids))
+        except Exception as e:
+            self._log_trakt_playback_failure("metadata setup", e)
 
     def get_player_streams(self):
-        activePlayers = (
-            '{"jsonrpc": "2.0", "method": "Player.GetActivePlayers", "id": 1}'
-        )
+        activePlayers = '{"jsonrpc": "2.0", "method": "Player.GetActivePlayers", "id": 1}'
         json_query = xbmc.executeJSONRPC(activePlayers)
         json_response = loads(json_query)
-        if not json_response.get("result"):
+        result = json_response.get("result")
+        if not result or not isinstance(result, list) or not result:
             return None, {}, []
-        playerid = json_response["result"][0]["playerid"]
+        playerid = result[0].get("playerid")
+        if playerid is None:
+            return None, {}, []
         details_query = {
             "jsonrpc": "2.0",
             "method": "Player.GetProperties",
@@ -670,18 +1589,95 @@ class JacktookPLayer(xbmc.Player):
             notification("Playback Cancelled", time=2000)
 
     def mark_watched(self, data):
+        if self._is_trakt_tracking_excluded():
+            return
         set_watched_file(data)
 
+    def _is_live_tv(self):
+        return bool(self.data.get("is_live_tv"))
+
+    def _is_trakt_tracking_excluded(self):
+        return (
+            self._is_live_tv()
+            or bool(self.data.get("is_informational_placeholder"))
+            or not self._has_trakt_tracking_identity()
+        )
+
+    def _has_trakt_tracking_identity(self):
+        ids = self.data.get("ids")
+        if not isinstance(ids, dict) or not self._is_positive_integer(ids.get("tmdb_id")):
+            return False
+
+        mode = self.data.get("mode")
+        if mode == "movies":
+            return True
+        if mode != "tv":
+            return False
+
+        tv_data = self.data.get("tv_data")
+        return isinstance(tv_data, dict) and all(
+            self._is_positive_integer(tv_data.get(key)) for key in ("season", "episode")
+        )
+
+    def _is_simkl_tracking_excluded(self):
+        return (
+            self._is_live_tv()
+            or bool(self.data.get("is_informational_placeholder"))
+            or not self._has_simkl_tracking_identity()
+        )
+
+    def _has_simkl_tracking_identity(self):
+        ids = self.data.get("ids")
+        if not isinstance(ids, dict) or not self._is_positive_integer(ids.get("tmdb_id")):
+            return False
+        mode = self.data.get("mode")
+        if mode == "movies":
+            return True
+        if mode != "tv":
+            return False
+        tv_data = self.data.get("tv_data")
+        return (
+            isinstance(tv_data, dict)
+            and self._is_non_negative_integer(tv_data.get("season"))
+            and self._is_positive_integer(tv_data.get("episode"))
+        )
+
+    @staticmethod
+    def _is_positive_integer(value):
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, int):
+            return value > 0
+        return isinstance(value, str) and value.strip().isdigit() and int(value.strip()) > 0
+
+    @staticmethod
+    def _is_non_negative_integer(value):
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, int):
+            return value >= 0
+        return isinstance(value, str) and value.strip().isdigit()
+
+    def _log_trakt_playback_failure(self, action, error):
+        ids = self.data.get("ids") or {}
+        kodilog(
+            f"[TRAKT] {action} failed; continuing playback "
+            f"(mode={self.data.get('mode')!r}, tmdb_id={ids.get('tmdb_id')!r}): {error}"
+        )
+
     def cancel_playback(self):
+        kodilog("[PLAYER] cancel_playback called")
         self._cleanup_playback_session()
         try:
-            setResolvedUrl(ADDON_HANDLE, False, ListItem(offscreen=True))
+            setResolvedUrl(get_addon_handle(), False, ListItem(offscreen=True))
         except Exception as e:
             kodilog(
                 f"setResolvedUrl failed in cancel_playback (expected when using direct play): {e}"
             )
+        self.stop()
 
     def _cleanup_playback_session(self):
+        kodilog("[PLAYER] _cleanup_playback_session: clearing PLAYLIST, closing dialogs")
         self.PLAYLIST.clear()
         close_busy_dialog()
         close_all_dialog()

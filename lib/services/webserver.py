@@ -1,33 +1,38 @@
-# -*- coding: utf-8 -*-
 """
 Local web server for managing Stremio addon sources from a phone/browser.
 
 Serves a web UI and exposes small JSON endpoints for CRUD operations
 on the Stremio custom addons stored in the Kodi addon cache.
 """
+
+import ipaddress
 import json
 import os
 import socket
 import threading
-import ipaddress
 from datetime import timedelta
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
+from lib.api.stremio.addon_manager import build_addon_instance_key
+from lib.clients.stremio.constants import (
+    STREMIO_ADDONS_CATALOGS_KEY,
+    STREMIO_ADDONS_KEY,
+    STREMIO_TV_ADDONS_KEY,
+    STREMIO_USER_ADDONS,
+    decode_selected_ids,
+    encode_selected_ids,
+)
+from lib.clients.stremio.protocol import (
+    MAX_RESOURCE_JSON_BYTES,
+    is_safe_http_url,
+    request_with_safe_redirects,
+)
 from lib.db.cached import cache
 from lib.utils.general.utils import USER_AGENT_HEADER
 from lib.utils.kodi.utils import kodilog
-from lib.clients.stremio.constants import (
-    STREMIO_ADDONS_KEY,
-    STREMIO_ADDONS_CATALOGS_KEY,
-    STREMIO_TV_ADDONS_KEY,
-    STREMIO_USER_ADDONS,
-    encode_selected_ids,
-    decode_selected_ids,
-)
-from lib.api.stremio.addon_manager import build_addon_instance_key
 
 _CACHE_EXPIRY = timedelta(days=365 * 20)
 _WEB_DIR = os.path.join(
@@ -44,11 +49,7 @@ _WEB_DIR = os.path.join(
 
 def _get_user_addons():
     """Return list of custom addon dicts from cache."""
-    return [
-        a
-        for a in (cache.get(STREMIO_USER_ADDONS) or [])
-        if a.get("transportName") == "custom"
-    ]
+    return [a for a in (cache.get(STREMIO_USER_ADDONS) or []) if a.get("transportName") == "custom"]
 
 
 def _get_selected_ids():
@@ -65,9 +66,10 @@ def _get_selected_ids():
 
 def _addon_capabilities(manifest):
     """Determine stream/catalog/tv capabilities from a manifest dict."""
+
     def supports_searchable_stream(prefixes):
         normalized = {str(prefix).rstrip(":") for prefix in (prefixes or []) if prefix}
-        return bool(normalized.intersection({"tt", "tmdb"}))
+        return not normalized or bool(normalized.intersection({"tt", "tmdb"}))
 
     resources = manifest.get("resources", [])
     types = manifest.get("types", [])
@@ -84,9 +86,9 @@ def _addon_capabilities(manifest):
 
             if res_name == "stream":
                 # Stremio addon providing streams
-                if any(t in res_types for t in ("movie", "series", "anime")) and supports_searchable_stream(res_prefixes):
-                    is_stream = True
-                elif supports_searchable_stream(res_prefixes):
+                if any(
+                    t in res_types for t in ("movie", "series", "anime")
+                ) and supports_searchable_stream(res_prefixes):
                     is_stream = True
 
                 if any(t in res_types for t in ("tv", "channel")):
@@ -97,7 +99,9 @@ def _addon_capabilities(manifest):
 
         elif isinstance(res, str):
             if res == "stream":
-                if any(t in types for t in ("movie", "series", "anime")) and supports_searchable_stream(manifest_prefixes):
+                if any(
+                    t in types for t in ("movie", "series", "anime")
+                ) and supports_searchable_stream(manifest_prefixes):
                     is_stream = True
                 if any(t in types for t in ("tv", "channel")):
                     is_tv = True
@@ -127,6 +131,7 @@ def _normalize_manifest_url(url):
 
 
 def _is_local_or_private_host(url):
+    """Whether the URL host is an IP literal or resolves to a private/loopback address."""
     host = (urlsplit(url).hostname or "").lower()
     if not host:
         return False
@@ -137,28 +142,86 @@ def _is_local_or_private_host(url):
         ip = ipaddress.ip_address(host)
         return ip.is_private or ip.is_loopback
     except ValueError:
+        pass
+
+    try:
+        addresses = [entry[4][0] for entry in socket.getaddrinfo(host, None)]
+    except (OSError, UnicodeError):
         return False
+
+    if not addresses:
+        return False
+
+    return all(_is_local_ip(address) for address in addresses)
+
+
+def _is_local_ip(address):
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback
+
+
+def _safe_url_description(url):
+    parts = urlsplit(str(url or ""))
+    if parts.scheme and parts.hostname:
+        return f"{parts.scheme}://{parts.hostname}/<redacted>"
+    return "<redacted URL>"
+
+
+def _allowed_manifest_url(url):
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"} or parts.username or parts.password:
+        return False
+    return is_safe_http_url(url) or _is_local_or_private_host(url)
 
 
 def _fetch_manifest(url, initial_url):
     def try_fetch(target_url):
         try:
-            kodilog(f"[WebServer] Fetching Stremio manifest: {target_url}")
-            resp = requests.get(target_url, headers=USER_AGENT_HEADER, timeout=10)
+            if not _allowed_manifest_url(target_url):
+                raise ValueError("manifest destination rejected")
+            kodilog(f"[WebServer] Fetching Stremio manifest: {_safe_url_description(target_url)}")
+            resp = request_with_safe_redirects(
+                requests.get,
+                target_url,
+                validator=_allowed_manifest_url,
+                headers=USER_AGENT_HEADER,
+                timeout=10,
+                stream=True,
+            )
             resp.raise_for_status()
-            return resp, resp.json(), None
+            if not _allowed_manifest_url(resp.url):
+                raise ValueError("manifest redirect rejected")
+            content = bytearray()
+            for chunk in resp.iter_content(chunk_size=8192):
+                content.extend(chunk)
+                if len(content) > MAX_RESOURCE_JSON_BYTES:
+                    raise ValueError("manifest too large")
+            manifest = json.loads(content.decode("utf-8"))
+            return resp, manifest, None
+        except ValueError as ex:
+            # ValueError here comes from our own validation or JSON decoding;
+            # the message is static and safe to surface to the UI.
+            return None, None, str(ex) or type(ex).__name__
         except Exception as ex:
-            return None, None, str(ex)
+            return None, None, type(ex).__name__
 
     resp, manifest, error = try_fetch(url)
 
-    if error and url.startswith("https://"):
-        if initial_url.startswith("stremio://") or _is_local_or_private_host(url):
-            http_url = url.replace("https://", "http://", 1)
-            kodilog(f"[WebServer] HTTPS failed, trying HTTP fallback: {http_url}")
-            r2, m2, e2 = try_fetch(http_url)
-            if not e2:
-                return r2, m2, None
+    if (
+        error
+        and url.startswith("https://")
+        and (initial_url.startswith("stremio://") or _is_local_or_private_host(url))
+    ):
+        http_url = url.replace("https://", "http://", 1)
+        kodilog(
+            f"[WebServer] HTTPS failed, trying HTTP fallback: {_safe_url_description(http_url)}"
+        )
+        r2, m2, e2 = try_fetch(http_url)
+        if not e2:
+            return r2, m2, None
 
     return resp, manifest, error
 
@@ -178,16 +241,11 @@ def _sync_add_addon(url):
         kodilog(f"[WebServer] Failed to add addon: {error}")
         return None, f"Failed to fetch manifest: {error or 'unknown error'}"
 
-    addon_key = build_addon_instance_key(
-        {"manifest": manifest, "transportUrl": resp.url}
-    )
+    addon_key = build_addon_instance_key({"manifest": manifest, "transportUrl": resp.url})
 
     # Check duplicate
     user_addons = list(cache.get(STREMIO_USER_ADDONS) or [])
-    if any(
-        build_addon_instance_key(a) == addon_key
-        for a in user_addons
-    ):
+    if any(build_addon_instance_key(a) == addon_key for a in user_addons):
         return None, "This addon is already added."
 
     caps = _addon_capabilities(manifest)
@@ -214,11 +272,7 @@ def _sync_add_addon(url):
 def _sync_remove_addon(addon_id):
     """Remove addon by manifest ID from all caches."""
     user_addons = list(cache.get(STREMIO_USER_ADDONS) or [])
-    new_addons = [
-        a
-        for a in user_addons
-        if build_addon_instance_key(a) != addon_id
-    ]
+    new_addons = [a for a in user_addons if build_addon_instance_key(a) != addon_id]
     cache.set(STREMIO_USER_ADDONS, new_addons, _CACHE_EXPIRY)
 
     for cache_key in [
@@ -270,7 +324,7 @@ def _validate_manifest(url):
     initial_url = url
     url = _normalize_manifest_url(url)
 
-    kodilog(f"[WebServer] Validating Stremio manifest: {url}")
+    kodilog(f"[WebServer] Validating Stremio manifest: {_safe_url_description(url)}")
     _, manifest, error = _fetch_manifest(url, initial_url)
     if error or not manifest:
         kodilog(f"[WebServer] Manifest validation failed: {error}")
@@ -348,9 +402,7 @@ class StremioRequestHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header(
-            "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"
-        )
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -359,7 +411,7 @@ class StremioRequestHandler(BaseHTTPRequestHandler):
     def _serve_index(self):
         index_path = os.path.join(_WEB_DIR, "index.html")
         try:
-            with open(index_path, "r", encoding="utf-8") as f:
+            with open(index_path, encoding="utf-8") as f:
                 self._send_html(f.read())
         except FileNotFoundError:
             self.send_error(500, "Web UI not found")
@@ -500,9 +552,7 @@ class StremioWebServer:
             return
         try:
             self._server = HTTPServer(("0.0.0.0", self.port), StremioRequestHandler)
-            self._thread = threading.Thread(
-                target=self._server.serve_forever, daemon=True
-            )
+            self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
             self._thread.start()
             kodilog(f"[WebServer] Started on port {self.port}")
         except Exception as e:

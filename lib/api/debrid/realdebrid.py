@@ -1,13 +1,14 @@
+from base64 import b64decode, b64encode
+
 from lib.api.debrid.base import DebridClient, ProviderException
-from base64 import b64encode, b64decode
+from lib.services.debrid.auth import run_realdebrid_auth
+from lib.services.debrid.download import run_realdebrid_download
 from lib.utils.kodi.utils import (
     dialog_ok,
     kodilog,
     set_setting,
     translation,
 )
-from lib.services.debrid.auth import run_realdebrid_auth
-from lib.services.debrid.download import run_realdebrid_download
 
 
 class RealDebrid(DebridClient):
@@ -30,9 +31,7 @@ class RealDebrid(DebridClient):
                 token_data["client_secret"],
                 token_data["code"],
             )
-            self.headers["Authorization"] = (
-                f"Bearer {access_token_data['access_token']}"
-            )
+            self.headers["Authorization"] = f"Bearer {access_token_data['access_token']}"
 
     def _handle_service_specific_errors(self, error_data: dict, status_code: int):
         error_code = error_data.get("error_code")
@@ -84,27 +83,6 @@ class RealDebrid(DebridClient):
             raise ProviderException(f"{err} (code {error_code})")
         raise ProviderException(f"Real-Debrid error (code {error_code})")
 
-    def _make_request(
-        self,
-        method,
-        url,
-        data=None,
-        params=None,
-        json=None,
-        is_return_none=False,
-        is_expected_to_fail=False,
-    ):
-        params = params or {}
-        return super()._make_request(
-            method,
-            url,
-            data=data,
-            params=params,
-            json=json,
-            is_return_none=is_return_none,
-            is_expected_to_fail=is_expected_to_fail,
-        )
-
     @staticmethod
     def encode_token_data(client_id, client_secret, code):
         token = f"{client_id}:{client_secret}:{code}"
@@ -113,7 +91,10 @@ class RealDebrid(DebridClient):
     @staticmethod
     def decode_token_str(token):
         try:
-            decoded = b64decode(token)
+            # Tolerate a token whose base64 padding was stripped or that was
+            # pasted with stray whitespace/newlines: both break the padding math.
+            raw = "".join(str(token).split())
+            decoded = b64decode(raw + "=" * (-len(raw) % 4))
             decoded_str = decoded.decode()
             parts = decoded_str.split(":")
             if len(parts) != 3:
@@ -125,7 +106,7 @@ class RealDebrid(DebridClient):
                 "code": code,
             }
         except Exception as e:
-            raise ProviderException(f"Invalid token {e}")
+            raise ProviderException(f"Invalid token {e}") from e
 
     def get_device_code(self):
         return self._make_request(
@@ -243,13 +224,18 @@ class RealDebrid(DebridClient):
             for item in payload:
                 yield from self._iter_host_candidates(item)
 
-    def get_user_torrent_list(self):
-        return self._make_request("GET", f"{self.BASE_URL}/torrents")
+    def get_user_torrent_list(self, filter=None, page=None, limit=None):
+        params = {}
+        if filter is not None:
+            params["filter"] = filter
+        if page is not None:
+            params["page"] = page
+        if limit is not None:
+            params["limit"] = limit
+        return self._make_request("GET", f"{self.BASE_URL}/torrents", params=params)
 
     def get_user_downloads_list(self, page=1):
-        return self._make_request(
-            "GET", f"{self.BASE_URL}/downloads", params={"page": page}
-        )
+        return self._make_request("GET", f"{self.BASE_URL}/downloads", params={"page": page})
 
     def get_user(self):
         return self._make_request("GET", f"{self.BASE_URL}/user")
@@ -267,13 +253,13 @@ class RealDebrid(DebridClient):
             import datetime
 
             try:
-                expires = datetime.datetime.strptime(
-                    expiration, "%Y-%m-%dT%H:%M:%S.%fZ"
-                )
+                expires = datetime.datetime.strptime(expiration, "%Y-%m-%dT%H:%M:%S.%fZ")
             except ValueError:
                 expires = datetime.datetime.strptime(expiration, "%Y-%m-%dT%H:%M:%SZ")
 
-            days = (expires - datetime.datetime.utcnow()).days
+            # RD timestamps carry a trailing Z, so keep both sides aware.
+            expires = expires.replace(tzinfo=datetime.timezone.utc)
+            days = (expires - datetime.datetime.now(datetime.timezone.utc)).days
             return days
         except Exception as e:
             kodilog(f"Error calculating RealDebrid days remaining: {e}")
@@ -284,11 +270,6 @@ class RealDebrid(DebridClient):
 
     def get_torrent_info(self, torrent_id):
         return self._make_request("GET", f"{self.BASE_URL}/torrents/info/{torrent_id}")
-
-    def get_torrent_instant_availability(self, torrent_hash):
-        return self._make_request(
-            "GET", f"{self.BASE_URL}/torrents/instantAvailability/{torrent_hash}"
-        )
 
     def disable_access_token(self):
         pass
@@ -316,9 +297,11 @@ class RealDebrid(DebridClient):
         if "download" in response:
             return response
 
-        if "error_code" in response:
-            if response["error_code"] == 23:
-                raise ProviderException("Exceed remote traffic limit")
+        # Errors normally arrive with an HTTP error status, so the base client
+        # already raised through _handle_service_specific_errors. Keep a
+        # defensive path for a 2xx body that still carries an error_code.
+        if response.get("error_code") is not None:
+            self._handle_service_specific_errors(response, 200)
         raise ProviderException(f"Failed to create download link. response: {response}")
 
     def delete_torrent(self, torrent_id):

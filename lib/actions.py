@@ -1,13 +1,14 @@
 import json
+
 from lib.domain.torrent import TorrentStream
 from lib.gui.resolver_window import ResolverWindow
 from lib.utils.kodi.utils import ADDON_PATH
-from lib.downloader import handle_download_file
+
 
 def resolve_for_pack_selection(params):
     data = json.loads(params["data"])
     info_hash = data.get("infoHash")
-    
+
     source = TorrentStream(
         guid="",
         url=data.get("url"),
@@ -21,6 +22,7 @@ def resolve_for_pack_selection(params):
         subindexer=data.get("subindexer"),
         addonKey=data.get("addonKey", ""),
         addonName=data.get("addonName", ""),
+        addonSourceName=data.get("addonSourceName", ""),
         addonInstanceLabel=data.get("addonInstanceLabel", ""),
         quality=data.get("quality"),
         isPack=data.get("isPack", False),
@@ -28,6 +30,7 @@ def resolve_for_pack_selection(params):
         fullLanguages=data.get("fullLanguages", []),
         publishDate=data.get("publishDate", ""),
         seeders=data.get("seeders", 0),
+        streamSubtitles=data.get("streamSubtitles") or data.get("stream_subtitles", []),
     )
 
     item_information = {
@@ -64,6 +67,7 @@ def resolve_for_subtitles(params):
         subindexer=data.get("subindexer"),
         addonKey=data.get("addonKey", ""),
         addonName=data.get("addonName", ""),
+        addonSourceName=data.get("addonSourceName", ""),
         addonInstanceLabel=data.get("addonInstanceLabel", ""),
         quality=data.get("quality"),
         isPack=data.get("isPack"),
@@ -71,6 +75,7 @@ def resolve_for_subtitles(params):
         fullLanguages=data.get("fullLanguages"),
         publishDate=data.get("publishDate"),
         seeders=data.get("seeders"),
+        streamSubtitles=data.get("streamSubtitles") or data.get("stream_subtitles", []),
     )
 
     item_information = {
@@ -89,5 +94,3 @@ def resolve_for_subtitles(params):
     )
     resolver_window.doModal()
     del resolver_window
-
-

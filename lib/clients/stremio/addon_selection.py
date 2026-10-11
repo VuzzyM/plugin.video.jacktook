@@ -1,28 +1,131 @@
-import requests
-from datetime import timedelta
+import json
+import webbrowser
 from collections import Counter
-from lib.db.cached import cache
-from lib.utils.general.utils import USER_AGENT_HEADER
-from lib.utils.kodi.utils import (
-    kodilog,
-    get_setting,
-    set_setting,
-    ADDON,
-    translation,
+from datetime import timedelta
+from urllib.parse import urlsplit, urlunsplit
+
+import requests
+import xbmcgui
+
+from lib.api.stremio.addon_manager import (
+    build_addon_instance_key,
+    build_legacy_addon_instance_key,
 )
-from lib.utils.kodi.settings import get_int_setting
 from lib.clients.stremio.constants import (
-    STREMIO_ADDONS_KEY,
+    STREMIO_ADDON_ALIASES_KEY,
     STREMIO_ADDONS_CATALOGS_KEY,
+    STREMIO_ADDONS_KEY,
+    STREMIO_CATALOG_ALIASES_KEY,
     STREMIO_TV_ADDONS_KEY,
     STREMIO_USER_ADDONS,
-    excluded_addons,
-    encode_selected_ids,
     decode_selected_ids,
+    encode_selected_ids,
+    excluded_addons,
 )
-from lib.clients.stremio.helpers import get_addons, ping_addons, get_addon_merge_key
-from lib.api.stremio.addon_manager import build_addon_instance_key
-import xbmcgui
+from lib.clients.stremio.helpers import (
+    clear_addon_alias,
+    clear_catalog_alias,
+    get_addon_alias,
+    get_addon_display_name,
+    get_addon_merge_key,
+    get_addons,
+    get_catalog_alias,
+    get_catalog_display_name,
+    ping_addons,
+    set_addon_alias,
+    set_catalog_alias,
+)
+from lib.clients.stremio.protocol import is_safe_http_url, request_with_safe_redirects
+from lib.db.cached import cache
+from lib.utils.general.utils import USER_AGENT_HEADER
+from lib.utils.kodi.settings import get_int_setting
+from lib.utils.kodi.utils import (
+    ADDON,
+    get_setting,
+    get_setting_fresh,
+    kodilog,
+    set_setting,
+    translation,
+)
+
+MAX_MANIFEST_BYTES = 512 * 1024
+
+
+def _redact_url(url):
+    """Keep configured paths and query parameters out of diagnostics."""
+    parts = urlsplit(str(url or ""))
+    if parts.scheme and parts.hostname:
+        return f"{parts.scheme}://{parts.hostname}/<redacted>"
+    return "<redacted URL>"
+
+
+def _safe_manifest_url(url):
+    """Return a safe configured manifest endpoint, or an empty string."""
+    normalized = str(url or "").strip()
+    if normalized.startswith("stremio://"):
+        normalized = normalized.replace("stremio://", "https://", 1)
+
+    parts = urlsplit(normalized)
+    if (
+        parts.scheme.lower() != "https"
+        or not parts.hostname
+        or parts.username
+        or parts.password
+        or parts.fragment
+        or not parts.path.rstrip("/").endswith("/manifest.json")
+    ):
+        return ""
+    return urlunsplit(("https", parts.netloc, parts.path, parts.query, ""))
+
+
+def _configuration_url(addon):
+    """Derive only the documented Stremio SDK configuration endpoint."""
+    manifest_url = _safe_manifest_url(addon.transport_url)
+    if not manifest_url:
+        return ""
+
+    parts = urlsplit(manifest_url)
+    if parts.query:
+        return ""
+    base_path = parts.path.rstrip("/")[: -len("/manifest.json")]
+    return urlunsplit(("https", parts.netloc, base_path + "/configure", "", ""))
+
+
+def _fetch_manifest(url):
+    """Fetch a small JSON manifest without exposing a configured URL."""
+    manifest_url = _safe_manifest_url(url)
+    if not manifest_url or not is_safe_http_url(manifest_url):
+        raise ValueError("invalid manifest URL")
+
+    response = request_with_safe_redirects(
+        requests.get,
+        manifest_url,
+        validator=is_safe_http_url,
+        headers=USER_AGENT_HEADER,
+        timeout=get_int_setting("stremio_timeout"),
+        stream=True,
+    )
+    response.raise_for_status()
+    final_url = _safe_manifest_url(response.url)
+    if not final_url or not is_safe_http_url(final_url):
+        raise ValueError("unsafe redirect")
+
+    content_length = response.headers.get("Content-Length")
+    if content_length and int(content_length) > MAX_MANIFEST_BYTES:
+        raise ValueError("manifest too large")
+
+    content = bytearray()
+    for chunk in response.iter_content(chunk_size=8192):
+        content.extend(chunk)
+        if len(content) > MAX_MANIFEST_BYTES:
+            raise ValueError("manifest too large")
+
+    manifest = json.loads(content.decode("utf-8"))
+    if not isinstance(manifest, dict) or not (manifest.get("id") or manifest.get("name")):
+        raise ValueError("invalid manifest")
+    if not isinstance(manifest.get("resources", []), (list, dict, str)):
+        raise ValueError("invalid manifest resources")
+    return manifest, final_url
 
 
 def _ping_addons_with_progress(addons):
@@ -54,13 +157,13 @@ def _ping_addons_with_progress(addons):
 
 def _build_addon_options(addons):
     """Build list items for addon multiselect with deduplication."""
-    name_counts = Counter(addon.manifest.name for addon in addons)
+    name_counts = Counter(get_addon_display_name(addon) for addon in addons)
     options = []
 
     for addon in addons:
-        name = addon.manifest.name
+        name = get_addon_display_name(addon)
         if name_counts[name] > 1:
-            label = addon.label()
+            label = addon.label().replace(addon.manifest.name, name, 1)
         else:
             label = name
 
@@ -74,6 +177,50 @@ def _build_addon_options(addons):
         options.append(option)
 
     return options
+
+
+def _select_addon(title, addons):
+    if not addons:
+        _show_no_addons_dialog()
+        return None
+
+    options = _build_addon_options(addons)
+    selected = xbmcgui.Dialog().select(title, options, useDetails=True)
+    if selected < 0:
+        return None
+    return addons[selected]
+
+
+def _get_aliasable_addons():
+    addon_manager = get_addons()
+    return _deduplicate_addons(
+        [addon for addon in addon_manager.addons if addon.manifest.id != "org.stremio.local"]
+    )
+
+
+def _clear_aliases_for_addon_keys(addon_keys):
+    addon_aliases = cache.get(STREMIO_ADDON_ALIASES_KEY) or {}
+    if isinstance(addon_aliases, dict):
+        addon_aliases = {k: v for k, v in addon_aliases.items() if k not in addon_keys}
+        cache.set(STREMIO_ADDON_ALIASES_KEY, addon_aliases, timedelta(days=365 * 20))
+
+    catalog_aliases = cache.get(STREMIO_CATALOG_ALIASES_KEY) or {}
+    if isinstance(catalog_aliases, dict):
+        catalog_aliases = {
+            k: v
+            for k, v in catalog_aliases.items()
+            if not any(k == addon_key or k.startswith(f"{addon_key}|") for addon_key in addon_keys)
+        }
+        cache.set(STREMIO_CATALOG_ALIASES_KEY, catalog_aliases, timedelta(days=365 * 20))
+
+
+def _should_clear_existing_alias():
+    return xbmcgui.Dialog().yesno(
+        translation(90821),
+        translation(90831),
+        nolabel=translation(90829),
+        yeslabel=translation(90830),
+    )
 
 
 def _show_addon_multiselect(title, addons, selected_ids):
@@ -119,16 +266,8 @@ def _deduplicate_addons(addons):
 
 
 def _filter_excluded_addons(addons):
-    """Filter out excluded addons and those requiring configuration."""
-    return [
-        addon
-        for addon in addons
-        if addon.manifest.id not in excluded_addons
-        and (
-            not addon.manifest.isConfigurationRequired()
-            or addon.transport_name == "custom"
-        )
-    ]
+    """Filter only explicitly excluded addons, including configurable ones."""
+    return [addon for addon in addons if addon.manifest.id not in excluded_addons]
 
 
 def _filter_stream_addons_by_id_prefix(addons, allowed_prefixes):
@@ -147,7 +286,12 @@ def _filter_stream_addons_by_id_prefix(addons, allowed_prefixes):
             resource_prefixes = {
                 str(p).rstrip(":") for p in (resource.id_prefixes or []) if p is not None
             }
-            if resource_prefixes.intersection(normalized_allowed):
+            supports_video_type = set(resource.types or []).intersection(
+                {"movie", "series", "anime"}
+            )
+            if supports_video_type and (
+                not resource_prefixes or resource_prefixes.intersection(normalized_allowed)
+            ):
                 filtered.append(addon)
                 break
 
@@ -217,10 +361,9 @@ def stremio_toggle_catalogs(params, check_availability=False):
                 ):
                     is_tv = True
                     break
-            elif res.name == "stream":
-                if "tv" in res.types or "channel" in res.types:
-                    is_tv = True
-                    break
+            elif res.name == "stream" and ("tv" in res.types or "channel" in res.types):
+                is_tv = True
+                break
         if not is_tv:
             filtered_addons.append(addon)
     addons = filtered_addons
@@ -264,10 +407,11 @@ def stremio_toggle_tv_addons(params, check_availability=False):
                 ):
                     addons.append(addon)
                     break
-            elif resource.name == "stream":
-                if "tv" in resource.types or "channel" in resource.types:
-                    addons.append(addon)
-                    break
+            elif resource.name == "stream" and (
+                "tv" in resource.types or "channel" in resource.types
+            ):
+                addons.append(addon)
+                break
 
     addons = _deduplicate_addons(addons)
     addons = _filter_excluded_addons(addons)
@@ -299,26 +443,16 @@ def stremio_toggle_tv_addons(params, check_availability=False):
 
 def add_custom_stremio_addon(params):
     dialog = xbmcgui.Dialog()
-    url = dialog.input(
-        translation(90523), type=xbmcgui.INPUT_ALPHANUM
-    )
+    url = dialog.input(translation(90523), type=xbmcgui.INPUT_ALPHANUM)
     if not url:
         dialog.ok(translation(90522), translation(90524))
         return
 
-    if url.startswith("stremio://"):
-        url = url.replace("stremio://", "https://")
-
-    # Try to fetch the manifest from the URL
     try:
-        response = requests.get(
-            url, headers=USER_AGENT_HEADER, timeout=get_int_setting("stremio_timeout")
-        )
-        response.raise_for_status()
-        manifest = response.json()
+        manifest, transport_url = _fetch_manifest(url)
     except Exception as e:
-        kodilog(f"Failed to fetch custom addon manifest: {e}")
-        dialog.ok(translation(90522), translation(90525) % e)
+        kodilog(f"Custom addon manifest import failed for {_redact_url(url)}: {type(e).__name__}")
+        dialog.ok(translation(90522), translation(90838))
         return
 
     try:
@@ -326,15 +460,11 @@ def add_custom_stremio_addon(params):
         if not id_:
             dialog.ok(translation(90522), translation(90526))
             return
-        addon_key = build_addon_instance_key(
-            {"manifest": manifest, "transportUrl": response.url}
-        )
+        addon_key = build_addon_instance_key({"manifest": manifest, "transportUrl": transport_url})
 
         resources = manifest.get("resources", [])
         # Normalize resources to list of dicts or strings
-        if isinstance(resources, dict):
-            resources = [resources]
-        elif isinstance(resources, str):
+        if isinstance(resources, (dict, str)):
             resources = [resources]
 
         # Determine capabilities
@@ -347,8 +477,16 @@ def add_custom_stremio_addon(params):
             if isinstance(res, dict):
                 res_types = res.get("types", types)
                 if res.get("name") == "stream":
-                    id_prefixes = res.get("idPrefixes", [])
-                    if "tt" in id_prefixes:
+                    id_prefixes = res.get("idPrefixes", manifest.get("idPrefixes", []))
+                    normalized_prefixes = {
+                        str(prefix).rstrip(":") for prefix in id_prefixes if prefix is not None
+                    }
+                    supports_video_type = set(res_types or []).intersection(
+                        {"movie", "series", "anime"}
+                    )
+                    if supports_video_type and (
+                        not normalized_prefixes or normalized_prefixes.intersection({"tt", "tmdb"})
+                    ):
                         is_stream = True
                     if "tv" in res_types or "channel" in res_types:
                         is_tv_stream = True
@@ -357,9 +495,10 @@ def add_custom_stremio_addon(params):
                     is_catalog = True
             elif isinstance(res, str):
                 if res == "stream":
-                    # For string resource, rely on top-elevel types
+                    # For string resource, rely on top-level types.
                     if "movie" in types or "series" in types:
-                        is_stream = True  # Assumption for now, though checking for 'tt' prefix is safer properly but here we just have string
+                        # Checking for 'tt' prefix would be safer, but strings do not expose it.
+                        is_stream = True
                     if "tv" in types or "channel" in types:
                         is_tv_stream = True
                 if res == "catalog":
@@ -389,9 +528,7 @@ def add_custom_stremio_addon(params):
 
         # Add to selected catalogs if catalog
         if is_catalog:
-            selected_catalog_keys = decode_selected_ids(
-                cache.get(STREMIO_ADDONS_CATALOGS_KEY)
-            )
+            selected_catalog_keys = decode_selected_ids(cache.get(STREMIO_ADDONS_CATALOGS_KEY))
             if addon_key not in selected_catalog_keys:
                 selected_catalog_keys.append(addon_key)
                 cache.set(
@@ -405,7 +542,7 @@ def add_custom_stremio_addon(params):
 
         custom_addon = {
             "manifest": manifest,
-            "transportUrl": response.url,
+            "transportUrl": transport_url,
             "transportName": "custom",
         }
         custom_merge_key = get_addon_merge_key(custom_addon)
@@ -420,7 +557,32 @@ def add_custom_stremio_addon(params):
         else:
             dialog.ok(translation(90522), translation(90529))
     except Exception as e:
-        dialog.ok(translation(90522), translation(90530) % e)
+        kodilog(f"Custom addon persistence failed: {type(e).__name__}")
+        dialog.ok(translation(90522), translation(90839))
+
+
+def configure_stremio_addon(params=None):
+    """Open a standard SDK configurator without handling its form data."""
+    addons = [
+        addon
+        for addon in _deduplicate_addons(get_addons().addons)
+        if (addon.manifest.isConfigurationRequired() or addon.manifest.isConfigurable())
+    ]
+    addon = _select_addon(translation(90836), addons)
+    if not addon:
+        return
+
+    configure_url = _configuration_url(addon)
+    if not configure_url:
+        xbmcgui.Dialog().ok(translation(90836), translation(90837))
+        return
+
+    try:
+        if not webbrowser.open(configure_url, new=2):
+            raise RuntimeError("browser did not open")
+    except Exception:
+        kodilog(f"Could not open Stremio addon configurator for {_redact_url(addon.transport_url)}")
+        xbmcgui.Dialog().ok(translation(90836), translation(90840))
 
 
 def remove_custom_stremio_addon(params=None):
@@ -433,11 +595,7 @@ def remove_custom_stremio_addon(params=None):
     options = []
     for addon in removable_addons:
         manifest = addon.get("manifest", {})
-        name = (
-            manifest.get("name")
-            or manifest.get("id")
-            or addon.get("transportUrl", "Unknown")
-        )
+        name = manifest.get("name") or manifest.get("id") or _redact_url(addon.get("transportUrl"))
         desc = manifest.get("description", "")
         item = xbmcgui.ListItem(label=name, label2=desc)
 
@@ -465,14 +623,14 @@ def remove_custom_stremio_addon(params=None):
         addon_key = build_addon_instance_key(addon)
         if addon_key:
             to_remove_keys.add(addon_key)
+        legacy_key = build_legacy_addon_instance_key(addon)
+        if legacy_key:
+            to_remove_keys.add(legacy_key)
 
     # Remove from user_addons
-    new_user_addons = [
-        a
-        for a in user_addons
-        if build_addon_instance_key(a) not in to_remove_keys
-    ]
+    new_user_addons = [a for a in user_addons if build_addon_instance_key(a) not in to_remove_keys]
     cache.set(STREMIO_USER_ADDONS, new_user_addons, timedelta(days=365 * 20))
+    _clear_aliases_for_addon_keys(to_remove_keys)
 
     # Remove from selected stream/catalogs/tv if present
     for cache_key in [
@@ -483,11 +641,63 @@ def remove_custom_stremio_addon(params=None):
         selected_keys = decode_selected_ids(cache.get(cache_key))
         if selected_keys:
             selected_keys = [k for k in selected_keys if k not in to_remove_keys]
-            cache.set(
-                cache_key, encode_selected_ids(selected_keys), timedelta(days=365 * 20)
-            )
+            cache.set(cache_key, encode_selected_ids(selected_keys), timedelta(days=365 * 20))
 
     xbmcgui.Dialog().ok(translation(90531), translation(90534))
+
+
+def rename_stremio_addon(params=None):
+    addons = _get_aliasable_addons()
+    addon = _select_addon(translation(90819), addons)
+    if not addon:
+        return
+
+    current_alias = get_addon_alias(addon)
+    if current_alias and _should_clear_existing_alias():
+        clear_addon_alias(addon)
+        xbmcgui.Dialog().ok(translation(90821), translation(90823))
+        return
+
+    new_alias = xbmcgui.Dialog().input(
+        translation(90820), defaultt=current_alias, type=xbmcgui.INPUT_ALPHANUM
+    )
+    if (new_alias or "").strip():
+        set_addon_alias(addon, new_alias)
+        xbmcgui.Dialog().ok(translation(90821), translation(90822))
+
+
+def rename_stremio_catalog(params=None):
+    addons = [addon for addon in _get_aliasable_addons() if addon.manifest.catalogs]
+    addon = _select_addon(translation(90824), addons)
+    if not addon:
+        return
+
+    catalog_options = []
+    for catalog in addon.manifest.catalogs:
+        item = xbmcgui.ListItem(
+            label=get_catalog_display_name(addon, catalog),
+            label2=f"{get_addon_display_name(addon)} - {catalog.type}/{catalog.id}",
+        )
+        item.setArt({"icon": addon.manifest.logo or "DefaultAddon.png"})
+        catalog_options.append(item)
+
+    selected = xbmcgui.Dialog().select(translation(90825), catalog_options, useDetails=True)
+    if selected < 0:
+        return
+
+    catalog = addon.manifest.catalogs[selected]
+    current_alias = get_catalog_alias(addon, catalog)
+    if current_alias and _should_clear_existing_alias():
+        clear_catalog_alias(addon, catalog)
+        xbmcgui.Dialog().ok(translation(90821), translation(90823))
+        return
+
+    new_alias = xbmcgui.Dialog().input(
+        translation(90826), defaultt=current_alias, type=xbmcgui.INPUT_ALPHANUM
+    )
+    if (new_alias or "").strip():
+        set_catalog_alias(addon, catalog, new_alias)
+        xbmcgui.Dialog().ok(translation(90821), translation(90822))
 
 
 def stremio_bypass_addons_select(params=None):
@@ -503,9 +713,7 @@ def stremio_bypass_addons_select(params=None):
 
     selected_ids = []
     for addon in addons:
-        if addon.key() in selected_values:
-            selected_ids.append(addon.key())
-        elif addon.manifest.name.lower() in selected_values:
+        if addon.key() in selected_values or addon.manifest.name.lower() in selected_values:
             selected_ids.append(addon.key())
 
     title = translation(90213)
@@ -515,3 +723,42 @@ def stremio_bypass_addons_select(params=None):
         return
 
     set_setting("stremio_bypass_addon_list", ",".join(selected_addon_keys))
+
+
+def stremio_subtitle_addons_select(params=None):
+    """Let the user pick which Stremio addons Jacktook queries for subtitles.
+
+    Mirrors :func:`stremio_bypass_addons_select` but targets the
+    ``subtitles`` resource (no id-prefix filter) and stores the result in the
+    ``stremio_subtitle_addons`` hidden setting as a CSV of addon instance
+    keys (one key per addon, e.g. ``"<manifest_id>|<transport_url>"``).
+    """
+    addon_manager = get_addons()
+    addons = addon_manager.get_addons_with_resource("subtitles")
+    addons = _deduplicate_addons(addons)
+    addons = _filter_excluded_addons(addons)
+    addons = list(reversed(addons))
+
+    if not addons:
+        xbmcgui.Dialog().ok(
+            translation(30953),
+            translation(30955),
+        )
+        return
+
+    selected_list_str = str(get_setting_fresh("stremio_subtitle_addons", "") or "").strip()
+    selected_values = [value.strip() for value in selected_list_str.split(",") if value.strip()]
+
+    selected_ids = [
+        addon.key()
+        for addon in addons
+        if addon.key() in selected_values or addon.manifest.name.lower() in selected_values
+    ]
+
+    title = translation(30953)
+    selected_addon_keys = _show_addon_multiselect(title, addons, selected_ids)
+
+    if selected_addon_keys is None:
+        return
+
+    set_setting("stremio_subtitle_addons", ",".join(selected_addon_keys))

@@ -1,30 +1,35 @@
 #!/usr/bin/env python3
-from datetime import date, datetime, timedelta
+import contextlib
 import json
 import os
 import re
-import xml.etree.ElementTree as ET
 import sys
 import time
+import xml.etree.ElementTree as ET
+from datetime import date, datetime, timedelta
 from typing import Any, Union
-
 from urllib.parse import quote, urlencode
-from lib.db.cached import cache
-from lib.utils.kodi.logging import kodilog
 
 import xbmc
 import xbmcaddon
 import xbmcgui
-
-from xbmcgui import Window, ListItem
-from xbmcplugin import addDirectoryItems, setResolvedUrl, endOfDirectory
+from xbmcgui import ListItem, Window
+from xbmcplugin import addDirectoryItems, endOfDirectory, setResolvedUrl
 from xbmcvfs import (
-    translatePath as translate_path,
-    delete as xbmc_delete,
-    listdir,
     File as xbmcvfs_File,
 )
+from xbmcvfs import (
+    delete as xbmc_delete,
+)
+from xbmcvfs import (
+    listdir,
+)
+from xbmcvfs import (
+    translatePath as translate_path,
+)
 
+from lib.db.cached import cache
+from lib.utils.kodi.logging import kodilog
 
 _URL = sys.argv[0]
 
@@ -54,10 +59,28 @@ JACKTORR_ADDON = _get_jacktorr_addon()
 
 
 ADDON = xbmcaddon.Addon()
-try:
-    ADDON_HANDLE = int(sys.argv[1])
-except IndexError:
-    ADDON_HANDLE = 0
+
+
+def get_addon_handle() -> int:
+    """Return the Kodi plugin handle of the *current* invocation.
+
+    With ``reuselanguageinvoker=true`` the Python interpreter is reused across
+    plugin invocations, so a module level ``int(sys.argv[1])`` captured at
+    import time goes stale and points at a handle Kodi already closed.  Kodi
+    rewrites ``sys.argv`` on every invocation, so the handle must be resolved
+    at call time and passed to ``xbmcplugin`` as a real ``int`` (Kodi 22's
+    SWIG bindings no longer coerce objects through ``__index__``).
+
+    Example
+    -------
+    >>> from lib.utils.kodi.utils import get_addon_handle
+    >>> addDirectoryItems(get_addon_handle(), items)
+    """
+    try:
+        return int(sys.argv[1])
+    except (IndexError, ValueError):
+        return 0
+
 
 ADDON_PATH = ADDON.getAddonInfo("path")
 ADDON_PROFILE_PATH = translate_path(ADDON.getAddonInfo("profile"))
@@ -69,9 +92,7 @@ ADDON_VERSION = ADDON.getAddonInfo("version")
 ADDON_NAME = ADDON.getAddonInfo("name")
 PLAYLIST = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
 
-CHANGELOG_PATH = translate_path(
-    "special://home/addons/plugin.video.jacktook/CHANGELOG.md"
-)
+CHANGELOG_PATH = translate_path("special://home/addons/plugin.video.jacktook/CHANGELOG.md")
 
 progressDialog = xbmcgui.DialogProgress()
 
@@ -120,9 +141,7 @@ def rebuild_settings_snapshot():
         if os.path.exists(profile_xml):
             root = ET.parse(profile_xml).getroot()
             settings_dict = {
-                item.get("id"): (item.text or "")
-                for item in root.iter("setting")
-                if item.get("id")
+                item.get("id"): (item.text or "") for item in root.iter("setting") if item.get("id")
             }
         else:
             settings_dict = {}
@@ -227,12 +246,13 @@ def set_property(prop: str, value: Any):
 
 
 def clear_property(prop):
+    cache.delete(prop)
     return Window(10000).clearProperty(prop)
 
 
 def burst_addon_settings():
     close_all_dialog()
-    xbmc.executebuiltin("Addon.OpenSettings(%s)" % JACKTOOK_BURST_ADOON_ID)
+    xbmc.executebuiltin(f"Addon.OpenSettings({JACKTOOK_BURST_ADOON_ID})")
 
 
 def get_kodi_version():
@@ -241,8 +261,24 @@ def get_kodi_version():
     return kodi_version
 
 
+def _is_addon_enabled(addon_id: str) -> bool:
+    """Return True only when the addon is installed *and* enabled.
+
+    ``System.HasAddon`` also matches installed-but-disabled addons, so the
+    explicit ``xbmcaddon.Addon`` lookup is required: it raises ``RuntimeError``
+    when the addon exists but is disabled.
+    """
+    try:
+        if not xbmc.getCondVisibility(f"System.HasAddon({addon_id})"):
+            return False
+        xbmcaddon.Addon(addon_id)
+        return True
+    except RuntimeError:
+        return False
+
+
 def is_torrest_addon():
-    return xbmc.getCondVisibility(f"System.HasAddon({TORREST_ADDON_ID})")
+    return _is_addon_enabled(TORREST_ADDON_ID)
 
 
 def is_jacktorr_addon():
@@ -250,31 +286,15 @@ def is_jacktorr_addon():
 
 
 def is_jacktorr_addon_enabled():
-    try:
-        if not xbmc.getCondVisibility(f"System.HasAddon({JACKTORR_ADDON_ID})"):
-            return False
-        addon = xbmcaddon.Addon(JACKTORR_ADDON_ID)
-        # If the addon is disabled, this will raise RuntimeError
-        return True
-    except RuntimeError:
-        # Addon exists but is disabled
-        return False
+    return _is_addon_enabled(JACKTORR_ADDON_ID)
 
 
 def is_youtube_addon_enabled():
-    try:
-        if not xbmc.getCondVisibility(f"System.HasAddon({YOUTUBE_ADDON_ID})"):
-            return False
-        addon = xbmcaddon.Addon(YOUTUBE_ADDON_ID)
-        # If the addon is disabled, this will raise RuntimeError
-        return True
-    except RuntimeError:
-        # Addon exists but is disabled
-        return False
+    return _is_addon_enabled(YOUTUBE_ADDON_ID)
 
 
 def is_elementum_addon():
-    return xbmc.getCondVisibility(f"System.HasAddon({ELEMENTUM_ADDON_ID})")
+    return _is_addon_enabled(ELEMENTUM_ADDON_ID)
 
 
 def is_burst_addon():
@@ -284,6 +304,7 @@ def is_burst_addon():
 def enable_addon(addon_id: str):
     """
     Enable a Kodi addon using JSON-RPC.
+
     Returns True if successful, False otherwise.
     """
     request = {
@@ -311,7 +332,7 @@ def logger(message, level=xbmc.LOGINFO):
 
 
 def get_url(**kwargs):
-    return "{}?{}".format(_URL, urlencode(kwargs))
+    return f"{_URL}?{urlencode(kwargs)}"
 
 
 def set_art(list_item, artwork_url):
@@ -340,7 +361,7 @@ def compat(line1, line2, line3):
 
 
 def kodi_refresh():
-	execute_builtin('UpdateLibrary(video,special://skin/foo)')
+    execute_builtin("UpdateLibrary(video,special://skin/foo)")
 
 
 def refresh():
@@ -375,10 +396,7 @@ def dialogyesno(header, text):
         header,
         text,
     )
-    if confirmed:
-        return True
-    else:
-        return False
+    return bool(confirmed)
 
 
 def dialog_select(heading, _list):
@@ -397,7 +415,7 @@ def container_update(name, **kwargs):
     :param path: The path where to update.
     :type path: str
     """
-    return "Container.Update({})".format(build_url(name, **kwargs))
+    return f"Container.Update({build_url(name, **kwargs)})"
 
 
 def container_refresh():
@@ -405,7 +423,7 @@ def container_refresh():
 
 
 def action_url_run(name, **kwargs):
-    return "RunPlugin({})".format(build_url(name, **kwargs))
+    return f"RunPlugin({build_url(name, **kwargs)})"
 
 
 def build_url(action, **params):
@@ -433,7 +451,7 @@ def buffer_and_play(info_hash, file_id, path):
 
 
 def kodi_play_media(name, *args, **kwargs):
-    return "PlayMedia({})".format(build_url(name, *args, **kwargs))
+    return f"PlayMedia({build_url(name, *args, **kwargs)})"
 
 
 def show_busy_dialog():
@@ -441,7 +459,7 @@ def show_busy_dialog():
 
 
 def show_picture(url):
-    xbmc.executebuiltin('ShowPicture("{}")'.format(url))
+    xbmc.executebuiltin(f'ShowPicture("{url}")')
 
 
 def close_busy_dialog():
@@ -488,24 +506,22 @@ def disable_enable_addon(addon_id=ADDON_ID):
                 }
             )
         )
-    except:
+    except Exception:
         pass
 
 
 def update_kodi_addons_db(addon_id=ADDON_ID):
     try:
         import sqlite3 as database
-        
+
         date = time.strftime("%Y-%m-%d %H:%M:%S")
-        dbcon = database.connect(
-            translate_path("special://database/Addons33.db"), timeout=40.0
-        )
+        dbcon = database.connect(translate_path("special://database/Addons33.db"), timeout=40.0)
         dbcon.execute(
             "INSERT OR REPLACE INTO installed (addonID, enabled, lastUpdated) VALUES (?, ?, ?)",
             (addon_id, 1, date),
         )
         dbcon.close()
-    except:
+    except Exception:
         pass
 
 
@@ -520,17 +536,28 @@ def bytes_to_human_readable(size: int, unit: str = "B") -> str:
 
 
 def convert_size_to_bytes(size_str: str) -> int:
-    """Convert size string to bytes."""
-    match = re.match(r"(\d+(?:\.\d+)?)\s*(GB|MB|KB|B)", size_str, re.IGNORECASE)
+    """Convert size string to bytes.
+
+    Supports:
+      - Standard units: GB, MB, KB, B
+      - European units: Go, Mo, Ko (Gigaoctet, Megaoctet, Kilooctet)
+      - European decimal comma: 1,5 GB → treated as 1.5 GB
+    """
+    # Normalize European decimal comma (only between digits, not a thousands separator)
+    size_str = re.sub(r"(\d),(\d)", r"\1.\2", size_str)
+    match = re.match(
+        r"(\d+(?:\.\d+)?)\s*(GB|MB|KB|B|Go|Mo|Ko)", size_str, re.IGNORECASE
+    )
+
     if match:
         size, unit = match.groups()
         size = float(size)
         unit = unit.upper()
-        if unit == "GB":
+        if unit in ("GB", "GO"):
             return int(size * 1024**3)
-        if unit == "MB":
+        if unit in ("MB", "MO"):
             return int(size * 1024**2)
-        if unit == "KB":
+        if unit in ("KB", "KO"):
             return int(size * 1024)
         return int(size)
     return 0
@@ -564,11 +591,11 @@ SECTION_VIEW_KEYS = (
 
 
 def get_view_setting_key(view_key):
-    return "saved_%s" % view_key.replace(".", "_")
+    return "saved_{}".format(view_key.replace(".", "_"))
 
 
 def get_view_property_key(view_key):
-    return "jacktook.%s" % view_key
+    return f"jacktook.{view_key}"
 
 
 def _get_named_view_id(name, default="current"):
@@ -696,9 +723,9 @@ def copy2clip(txt):
     platform = sys.platform
     if platform == "win32":
         try:
-            cmd = "echo %s|clip" % txt.strip()
+            cmd = f"echo {txt.strip()}|clip"
             return subprocess.check_call(cmd, shell=True)
-        except:
+        except Exception:
             pass
     elif platform == "linux2":
         try:
@@ -706,7 +733,7 @@ def copy2clip(txt):
 
             p = Popen(["xsel", "-pi"], stdin=PIPE)
             p.communicate(input=txt)
-        except:
+        except Exception:
             pass
 
 
@@ -718,6 +745,7 @@ def get_datetime(string: bool = False, dt: bool = False) -> Union[date, datetime
     :return: By default, returns a date object.
     """
     now = datetime.now()
+
     if dt:
         return now
     else:
@@ -740,15 +768,15 @@ def cancel_playback():
     PLAYLIST.clear()
     close_busy_dialog()
     close_all_dialog()
-    try:
+    with contextlib.suppress(Exception):
         xbmc.Player().stop()
-    except Exception:
-        pass
-    setResolvedUrl(ADDON_HANDLE, False, ListItem(offscreen=True))
+    # Gracefully handle the "no handle" case (background/monitor contexts)
+    with contextlib.suppress(RuntimeError, SystemExit):
+        setResolvedUrl(get_addon_handle(), False, ListItem(offscreen=True))
 
 
 def finish_action():
-    setResolvedUrl(ADDON_HANDLE, False, ListItem(offscreen=True))
+    setResolvedUrl(get_addon_handle(), False, ListItem(offscreen=True))
 
 
 def make_list_item(label="", path="", offscreen=True):
@@ -762,7 +790,10 @@ def make_list_item(label="", path="", offscreen=True):
 
 def add_directory_items_batch(items):
     if items:
-        addDirectoryItems(ADDON_HANDLE, items)
+        from lib.utils.simkl_indicators import apply_simkl_indicators
+
+        apply_simkl_indicators(items)
+        addDirectoryItems(get_addon_handle(), items)
 
 
 def is_widget():
@@ -770,6 +801,4 @@ def is_widget():
 
 
 def end_of_directory(cache=True):
-    endOfDirectory(
-        ADDON_HANDLE, cacheToDisc=False if is_widget() or not cache else True
-    )
+    endOfDirectory(get_addon_handle(), cacheToDisc=not (is_widget() or not cache))

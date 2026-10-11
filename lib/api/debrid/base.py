@@ -1,28 +1,30 @@
-import requests
 import traceback
 from abc import ABC, abstractmethod
 from json.decoder import JSONDecodeError
+from typing import Any, Dict, Optional
+
+import requests
 
 from lib.utils.kodi.utils import kodilog, notification
-from typing import Optional, Dict, Any
 
 
 class DebridClient(ABC):
     """
     Abstract base class for Debrid service clients.
+
     Handles HTTP requests, error handling, and session management.
     """
 
-    def __init__(
-        self, token: str, timeout: int = 15, session: Optional[requests.Session] = None
-    ):
-        """
+    def __init__(self, token: str, timeout: int = 15, session: Optional[requests.Session] = None):
+        """Initialize the debrid client.
+
         Args:
             token (str): API token for authentication.
             timeout (int): Request timeout in seconds.
             session (requests.Session, optional): Custom session for requests.
         """
         self.token = token
+
         self.timeout = timeout
         self.session = session or requests.Session()
         self.headers = {}
@@ -68,20 +70,18 @@ class DebridClient(ABC):
             )
         except requests.exceptions.Timeout as e:
             kodilog(f"Timeout: {e}")
-            raise ProviderException("Request timed out.")
+            raise ProviderException("Request timed out.") from e
         except requests.exceptions.ConnectionError as e:
             kodilog(f"ConnectionError: {e}")
-            raise ProviderException(f"ConnectionError: {e}")
+            raise ProviderException(f"ConnectionError: {e}") from e
         except requests.exceptions.RequestException as e:
             kodilog(f"RequestException: {e}")
-            raise ProviderException(f"Request failed: {str(e)}")
+            raise ProviderException(f"Request failed: {e!s}") from e
         except Exception as e:
             kodilog(f"Unexpected error: {e}")
-            raise ProviderException(f"Unexpected error: {str(e)}")
+            raise ProviderException(f"Unexpected error: {e!s}") from e
 
-    def _handle_errors(
-        self, response: requests.Response, is_expected_to_fail: bool
-    ) -> None:
+    def _handle_errors(self, response: requests.Response, is_expected_to_fail: bool) -> None:
         """
         Handle HTTP errors and raise ProviderException as needed.
         """
@@ -110,13 +110,11 @@ class DebridClient(ABC):
 
             # Specific cases
             if status_code == 401:
-                raise ProviderException("Invalid token", status_code, error_content)
+                raise ProviderException("Invalid token", status_code, error_content) from error
             elif status_code == 403:
-                raise ProviderException("Forbidden", status_code, error_content)
+                raise ProviderException("Forbidden", status_code, error_content) from error
             elif status_code == 500:
-                raise ProviderException(
-                    "Internal server error", status_code, error_content
-                )
+                raise ProviderException("Internal server error", status_code, error_content) from error
             else:
                 kodilog(
                     f"Error: {''.join(traceback.format_exception(type(error), error, error.__traceback__))}"
@@ -125,7 +123,7 @@ class DebridClient(ABC):
                     f"API Error: {status_code} for {url}\nDetails: {error_content}",
                     status_code,
                     error_content,
-                )
+                ) from error
 
     @abstractmethod
     def initialize_headers(self) -> None:
@@ -142,9 +140,7 @@ class DebridClient(ABC):
         raise NotImplementedError
 
     @staticmethod
-    def _parse_response(
-        response: requests.Response, is_return_none: bool
-    ) -> Dict[str, Any]:
+    def _parse_response(response: requests.Response, is_return_none: bool) -> Dict[str, Any]:
         """
         Parse the HTTP response as JSON.
         """
@@ -155,12 +151,10 @@ class DebridClient(ABC):
         except JSONDecodeError as error:
             raise ProviderException(
                 f"Failed to parse response error: {error}. \nresponse: {response.text}"
-            )
+            ) from error
 
     @abstractmethod
-    def _handle_service_specific_errors(
-        self, error_data: dict, status_code: int
-    ) -> None:
+    def _handle_service_specific_errors(self, error_data: dict, status_code: int) -> None:
         """
         Service specific errors on api requests. Must be implemented by subclasses.
         """
@@ -168,9 +162,7 @@ class DebridClient(ABC):
 
 
 class ProviderException(Exception):
-    def __init__(
-        self, message: str, status_code: Optional[int] = None, error_content: Any = None
-    ):
+    def __init__(self, message: str, status_code: Optional[int] = None, error_content: Any = None):
         self.message = message
         self.status_code = status_code
         self.error_content = error_content

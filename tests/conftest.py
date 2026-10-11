@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 from unittest.mock import MagicMock
 
 # --- Create stub classes for xbmcgui to avoid type hint issues in Python 3.13 ---
@@ -26,6 +26,9 @@ class _XbmcguiStub:
 
         def getProperty(self, key):
             return ""
+
+        def clearProperty(self, key):
+            pass
 
         def setFocus(self, control):
             pass
@@ -62,6 +65,9 @@ class _XbmcguiStub:
 
         def select(self, *args, **kwargs):
             return 0
+
+        def multiselect(self, *args, **kwargs):
+            return []
 
         def notification(self, *args, **kwargs):
             pass
@@ -103,10 +109,13 @@ class _XbmcguiStub:
 
     class ListItem:
         def __init__(self, *args, **kwargs):
-            pass
+            self._label = kwargs.get("label", "")
+
+        def getLabel(self):
+            return self._label
 
         def setLabel(self, label):
-            pass
+            self._label = label
 
         def setLabel2(self, label):
             pass

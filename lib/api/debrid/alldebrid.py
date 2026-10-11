@@ -1,8 +1,7 @@
-import requests
 from lib.api.debrid.base import DebridClient, ProviderException
 from lib.jacktook.utils import kodilog
-from lib.utils.kodi.utils import dialog_ok, set_setting, translation
 from lib.services.debrid.auth import run_alldebrid_auth
+from lib.utils.kodi.utils import dialog_ok, set_setting, translation
 
 
 class AllDebrid(DebridClient):
@@ -37,7 +36,13 @@ class AllDebrid(DebridClient):
             self.BASE_URL = "https://api.alldebrid.com/v4.0"
         url = f"{self.BASE_URL}{url}"
         return super()._make_request(
-            method, url, data, json, params, is_return_none, is_expected_to_fail
+            method,
+            url,
+            data=data,
+            params=params,
+            json=json,
+            is_return_none=is_return_none,
+            is_expected_to_fail=is_expected_to_fail,
         )
 
     def auth(self):
@@ -70,9 +75,7 @@ class AllDebrid(DebridClient):
             if error_code == "AUTH_BAD_APIKEY":
                 raise ProviderException("Invalid AllDebrid API key")
             elif error_code == "NO_SERVER":
-                raise ProviderException(
-                    f"Failed to add magnet link to AllDebrid {response_data}"
-                )
+                raise ProviderException(f"Failed to add magnet link to AllDebrid {response_data}")
             elif error_code == "AUTH_BLOCKED":
                 raise ProviderException("API got blocked on AllDebrid")
             elif error_code == "MAGNET_MUST_BE_PREMIUM":
@@ -82,14 +85,10 @@ class AllDebrid(DebridClient):
             elif error_code == "MAGNET_INVALID_ID":
                 raise ProviderException("Invalid magnet link for AllDebrid")
             else:
-                raise ProviderException(
-                    f"Failed to add magnet link to AllDebrid {response_data}"
-                )
+                raise ProviderException(f"Failed to add magnet link to AllDebrid {response_data}")
 
     def add_magnet(self, magnet_link):
-        response = self._make_request(
-            "POST", "/magnet/upload", data={"magnets[]": magnet_link}
-        )
+        response = self._make_request("POST", "/magnet/upload", data={"magnets[]": magnet_link})
         self._validate_error_response(response)
         return response
 
@@ -129,9 +128,7 @@ class AllDebrid(DebridClient):
         return response.get("data", {}).get("magnets", {})
 
     def get_torrent_instant_availability(self, magnet_links):
-        response = self._make_request(
-            "POST", "/magnet/instant", data={"magnets[]": magnet_links}
-        )
+        response = self._make_request("POST", "/magnet/instant", data={"magnets[]": magnet_links})
         return response.get("data", {}).get("magnets", [])
 
     def get_available_torrent(self, info_hash):

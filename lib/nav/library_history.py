@@ -1,23 +1,28 @@
-from datetime import timedelta
 import os
+from datetime import timedelta
 
 from xbmcgui import Dialog
 from xbmcplugin import addDirectoryItem, endOfDirectory
 
 from lib.db.cached import cache
 from lib.utils.general.items_menus import history_menu_items, library_menu_items
-from lib.utils.general.utils import build_list_item, clear_history_by_type, set_pluging_category
+from lib.utils.general.utils import (
+    build_list_item,
+    clear_history_by_type,
+    set_pluging_category,
+)
 from lib.utils.kodi.settings import get_cache_expiration
 from lib.utils.kodi.utils import (
     ADDON_PATH,
-    ADDON_HANDLE,
     add_directory_items_batch,
     apply_section_view,
     build_url,
     container_update,
     end_of_directory,
     finish_action,
+    get_addon_handle,
     kodi_play_media,
+    kodilog,
     make_list_item,
     notification,
     show_keyboard,
@@ -64,9 +69,7 @@ def _render_menu(items, cache_listing=True):
             context_menu.append(
                 (
                     label,
-                    container_update(
-                        context_item["action"], **context_item.get("params", {})
-                    ),
+                    container_update(context_item["action"], **context_item.get("params", {})),
                 )
             )
         if context_menu:
@@ -93,7 +96,7 @@ def library_menu(params):
 def continue_watching_menu(params):
     from lib.utils.views.continue_watching import show_continue_watching
 
-    show_continue_watching()
+    show_continue_watching(params)
 
 
 def remove_from_continue_watching(params):
@@ -127,8 +130,7 @@ def remove_from_library(params):
 
 
 def clear_library(params):
-    from lib.utils.views.library import clear_library_items
-    from lib.utils.views.library import show_library_items
+    from lib.utils.views.library import clear_library_items, show_library_items
 
     kodilog(f"clear_library action invoked with params={params}")
 
@@ -142,8 +144,9 @@ def clear_library(params):
 
 
 def add_to_library(params):
-    from lib.utils.general.utils import add_to_library as add_lib
     import json
+
+    from lib.utils.general.utils import add_to_library as add_lib
 
     data = params.get("data")
     if data:
@@ -155,14 +158,31 @@ def add_to_library(params):
 def search_direct(params):
     set_pluging_category(translation(90011))
     mode = params.get("mode")
+    history_key = params.get("history_key", mode)
+    jackgram_only = (
+        str(params.get("jackgram_only", "")).lower() == "true"
+        or params.get("jackgram_only") is True
+    )
+    raw_label_id = params.get("label_id", 90006)
+    try:
+        label_id = int(raw_label_id)
+    except (TypeError, ValueError):
+        label_id = 90006
     query = params.get("query", "")
     is_clear = params.get("is_clear", False)
     is_keyboard = params.get("is_keyboard", True)
     update_listing = params.get("update_listing", False)
     rename = params.get("rename", False)
+    history_params = {}
+    if history_key != mode:
+        history_params["history_key"] = history_key
+    if jackgram_only:
+        history_params["jackgram_only"] = "true"
+    if label_id != 90006:
+        history_params["label_id"] = label_id
 
     if is_clear:
-        cache.clear_list(key=mode)
+        cache.clear_list(key=history_key)
         is_keyboard = False
 
     if rename or is_clear:
@@ -172,26 +192,23 @@ def search_direct(params):
         text = show_keyboard(id=30243, default=query)
         if text:
             cache.add_to_list(
-                key=mode,
+                key=history_key,
                 item=(mode, text),
                 expires=timedelta(hours=get_cache_expiration()),
             )
 
-    list_item = make_list_item(label=translation(90006))
+    list_item = make_list_item(label=translation(label_id))
     list_item.setArt({"icon": os.path.join(ADDON_PATH, "resources", "img", "search.png")})
     addDirectoryItem(
-        ADDON_HANDLE,
-        build_url("search_direct", mode=mode),
+        get_addon_handle(),
+        build_url("search_direct", mode=mode, **history_params),
         list_item,
         isFolder=True,
     )
 
-    for item_mode, text in cache.get_list(key=mode):
+    for item_mode, text in cache.get_list(key=history_key):
         list_item = make_list_item(label=f"[I]{text}[/I]")
-        list_item.setArt(
-            {"icon": os.path.join(ADDON_PATH, "resources", "img", "search.png")}
-        )
-        list_item.setProperty("IsPlayable", "true")
+        list_item.setArt({"icon": os.path.join(ADDON_PATH, "resources", "img", "search.png")})
         list_item.addContextMenuItems(
             [
                 (
@@ -202,6 +219,7 @@ def search_direct(params):
                         query=text,
                         rescrape=True,
                         direct=True,
+                        **history_params,
                     ),
                 ),
                 (
@@ -211,13 +229,18 @@ def search_direct(params):
                         mode=item_mode,
                         query=text,
                         rename=True,
+                        **history_params,
                     ),
+                ),
+                (
+                    translation(90755),
+                    "RunPlugin(plugin://plugin.video.jacktook/?action=source_manager_toggle)",
                 ),
             ]
         )
         addDirectoryItem(
-            ADDON_HANDLE,
-            build_url("search", mode=item_mode, query=text, direct=True),
+            get_addon_handle(),
+            build_url("search", mode=item_mode, query=text, direct=True, **history_params),
             list_item,
             isFolder=False,
         )
@@ -225,12 +248,12 @@ def search_direct(params):
     list_item = make_list_item(label="Clear Searches")
     list_item.setArt({"icon": os.path.join(ADDON_PATH, "resources", "img", "clear.png")})
     addDirectoryItem(
-        ADDON_HANDLE,
-        build_url("search_direct", mode=mode, is_clear=True),
+        get_addon_handle(),
+        build_url("search_direct", mode=mode, is_clear=True, **history_params),
         list_item,
         isFolder=True,
     )
-    endOfDirectory(ADDON_HANDLE, updateListing=update_listing)
+    endOfDirectory(get_addon_handle(), updateListing=update_listing)
     apply_section_view("view.main")
 
 

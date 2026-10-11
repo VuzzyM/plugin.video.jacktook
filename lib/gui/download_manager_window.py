@@ -8,10 +8,22 @@ import xbmcgui
 import xbmcvfs
 
 from lib.download_manager import DownloadManager
-from lib.downloader import Downloader, cancel_flag_cache, get_download_metadata, handle_pause_download, resume_download
+from lib.downloader import (
+    Downloader,
+    cancel_flag_cache,
+    get_download_metadata,
+    handle_pause_download,
+)
 from lib.gui.base_window import BaseWindow
 from lib.utils.kodi.settings import get_setting as _get_setting
-from lib.utils.kodi.utils import ADDON_PATH, bytes_to_human_readable, execute_builtin, kodilog, open_file as _open_file, translatePath as _translatePath, translation
+from lib.utils.kodi.utils import (
+    bytes_to_human_readable,
+    execute_builtin,
+    kodilog,
+    translation,
+)
+from lib.utils.kodi.utils import open_file as _open_file
+from lib.utils.kodi.utils import translatePath as _translatePath
 
 
 class DownloadManagerWindow(BaseWindow):
@@ -35,8 +47,10 @@ class DownloadManagerWindow(BaseWindow):
         """Scan the download directory (recursively) for .jacktook.json files
         and register or update any downloads in the registry. This ensures
         that downloads started before the window was opened, or organized
-        into subfolders, appear in the manager."""
+        into subfolders, appear in the manager.
+        """  # noqa: D205
         download_dir = _translatePath(_get_setting("download_dir"))
+
         if not download_dir or not xbmcvfs.exists(download_dir):
             kodilog(f"[DownloadManagerWindow] Download directory not found: {download_dir}")
             return
@@ -50,6 +64,7 @@ class DownloadManagerWindow(BaseWindow):
     def _walk_and_sync(self, directory, manager):
         """Recursively walk a directory using xbmcvfs and sync .jacktook.json files."""
         dirs, files = xbmcvfs.listdir(directory)
+
         for filename in files:
             filename = filename.decode("utf-8") if isinstance(filename, bytes) else filename
             if not filename.endswith(".jacktook.json"):
@@ -130,7 +145,10 @@ class DownloadManagerWindow(BaseWindow):
         entry = manager.get_entry(self._focused_item_id) if self._focused_item_id else None
         if entry:
             self.setProperty("selected_progress", str(entry.progress))
-            self.setProperty("selected_speed", bytes_to_human_readable(entry.speed) + "/s" if entry.speed else "")
+            self.setProperty(
+                "selected_speed",
+                bytes_to_human_readable(entry.speed) + "/s" if entry.speed else "",
+            )
             eta_secs = entry.eta
             if eta_secs and eta_secs > 0:
                 eta_mins, eta_secs = divmod(eta_secs, 60)
@@ -143,8 +161,14 @@ class DownloadManagerWindow(BaseWindow):
                     self.setProperty("selected_eta", f"{eta_secs}s")
             else:
                 self.setProperty("selected_eta", "")
-            self.setProperty("selected_size", bytes_to_human_readable(entry.size) if entry.size else "")
-            self.setProperty("selected_downloaded", bytes_to_human_readable(entry.downloaded) if entry.downloaded else "")
+            self.setProperty(
+                "selected_size",
+                bytes_to_human_readable(entry.size) if entry.size else "",
+            )
+            self.setProperty(
+                "selected_downloaded",
+                bytes_to_human_readable(entry.downloaded) if entry.downloaded else "",
+            )
             self.setProperty("selected_status", entry.status)
             self.setProperty("selected_name", entry.name)
         else:
@@ -192,12 +216,14 @@ class DownloadManagerWindow(BaseWindow):
                 else:
                     eta_str = ""
                 size_str = bytes_to_human_readable(entry.size) if entry.size else ""
-                downloaded_str = bytes_to_human_readable(entry.downloaded) if entry.downloaded else ""
+                downloaded_str = (
+                    bytes_to_human_readable(entry.downloaded) if entry.downloaded else ""
+                )
 
                 # Build secondary info line
                 parts = []
                 if entry.status == "completed":
-                    status_str = translation(90811)  # "Completed"
+                    translation(90811)  # "Completed"
                 elif speed_str:
                     parts.append(speed_str)
                 if eta_str and entry.status != "completed":
@@ -288,14 +314,15 @@ class DownloadManagerWindow(BaseWindow):
             entry.cancel_flag = True
             manager.set_status(entry_id, "paused")
             import json
+
             handle_pause_download({"file_path": json.dumps(entry_id)}, refresh=False)
 
     def _resume_download(self, entry_id):
         manager = DownloadManager()
         entry = manager.get_entry(entry_id)
         if entry and entry.status == "paused":
-            import json
             import os
+
             dest_path = entry_id
             # Clear the cancel flag left by the pause operation
             cancel_flag_cache.set(dest_path, False)

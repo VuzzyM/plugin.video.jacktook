@@ -1,21 +1,27 @@
+import contextlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List
 
-from lib.db.cached import cache
+import xbmcgui
+from xbmcgui import WindowXML, WindowXMLDialog
+
 from lib.domain.torrent import TorrentStream
 from lib.gui.custom_progress import CustomProgressDialog
 from lib.gui.play_next_window import PlayNext
 from lib.gui.resolver_window import ResolverWindow
 from lib.gui.resume_window import ResumeDialog
-from lib.player import JacktookPLayer
-from lib.utils.kodi.utils import ADDON_PATH, PLAYLIST, build_url, kodilog, translation
+from lib.gui.search_status_window import SearchStatusWindow, SearchTaskManager
 from lib.gui.source_select import SourceSelect
-from lib.gui.search_status_window import SearchTaskManager, SearchStatusWindow
-from concurrent.futures import ThreadPoolExecutor
-
-from xbmcgui import WindowXMLDialog, WindowXML
-import xbmcgui
-import xbmc
+from lib.utils.kodi.utils import (
+    ADDON_PATH,
+    PLAYLIST,
+    clear_property,
+    kodilog,
+    set_property,
+    sleep,
+    translation,
+)
 
 
 class CustomWindow(WindowXML):
@@ -58,6 +64,7 @@ class CustomDialog(WindowXMLDialog):
     _url = 32502
     _close_button_id = 32503
     _qrcode = 32504
+    _call_to_action = 32505
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -65,19 +72,19 @@ class CustomDialog(WindowXMLDialog):
         self.text = kwargs.get("text")
         self.url = kwargs.get("url")
         self.qrcode_path = kwargs.get("qrcode")
+        self.call_to_action = kwargs.get("call_to_action")
 
     def onInit(self):
         self.getControl(self._heading).setLabel(self.heading)
         self.getControl(self._text).setLabel(self.text)
         self.getControl(self._url).setLabel(self.url)
+        self.getControl(self._call_to_action).setLabel(self.call_to_action or "")
         if self.qrcode_path:
             self.getControl(self._qrcode).setImage(self.qrcode_path)
             self.getControl(self._qrcode).setVisible(True)
         else:
-            try:
+            with contextlib.suppress(BaseException):
                 self.getControl(self._qrcode).setVisible(False)
-            except:
-                pass
 
     def onClick(self, controlId):
         if controlId == self._close_button_id:
@@ -112,9 +119,7 @@ _mock_information = {
 }
 
 
-def source_select(
-    item_info: Dict[str, str], xml_file: str, sources: List[TorrentStream]
-) -> bool:
+def source_select(item_info: Dict[str, str], xml_file: str, sources: List[TorrentStream]) -> bool:
     window = SourceSelect(
         xml_file,
         ADDON_PATH,
@@ -128,6 +133,7 @@ def source_select(
 
 
 def run_next_dialog(params):
+    playback_session_id = ""
     try:
         playlist_size = PLAYLIST.size()
         playlist_pos = PLAYLIST.getposition() if playlist_size > 0 else -1
@@ -135,82 +141,55 @@ def run_next_dialog(params):
         kodilog(f"Error accessing playlist in run_next_dialog: {e}")
         return
 
-    if playlist_size > 0 and playlist_pos != (playlist_size - 1):
-        window = None
-        try:
-            window = PlayNext(
-                "playing_next.xml",
-                ADDON_PATH,
-                item_information=json.loads(params["item_info"]),
-            )
-            window.doModal()
-        finally:
-            action = window.action if window else None
-            if window is not None:
-                del window
+    window = None
+    try:
+        item_information = json.loads(params["item_info"])
+        playback_session_id = str(
+            item_information.get("playback_session_id") or ""
+        )
+        if playlist_size > 0 and playlist_pos >= 0 and playlist_pos < playlist_size - 1:
+            try:
+                next_item = PLAYLIST[playlist_pos + 1]
+                next_label = next_item.getLabel()
+                if next_label:
+                    item_information["next_label"] = next_label
+            except Exception as e:
+                kodilog(f"Unable to read next playlist item label: {e}")
+        else:
+            kodilog("No next playlist item label available for PlayNext dialog")
 
-            if action == "next_episode":
-                xbmc.log(
-                    f"[JACKTOOK] Next Episode triggered from dialog.",
-                    xbmc.LOGINFO,
+        window = PlayNext(
+            "playing_next.xml",
+            ADDON_PATH,
+            item_information=item_information,
+        )
+        window.doModal()
+    finally:
+        # Never let this cleanup raise: a partially constructed window (player
+        # unavailable) may not expose `action`, and that must not turn into an
+        # unhandled exception that kills the handoff.
+        action = getattr(window, "action", None) if window else None
+        if window is not None:
+            del window
+
+        if action == "next_episode":
+            # Let Kodi finish restoring VideoNav focus after the modal close
+            # animation before the owning player monitor consumes this handoff.
+            sleep(200)
+            if playback_session_id:
+                set_property(
+                    "jacktook_next_dialog_action",
+                    json.dumps(
+                        {
+                            "action": "next_episode",
+                            "session_id": playback_session_id,
+                        }
+                    ),
                 )
-                player = xbmc.Player()
-                if not player.isPlaying():
-                    return
-
-                # Wait for window animation
-                xbmc.sleep(600)
-
-                if not player.isPlaying():
-                    return
-
-                # Extract episode info and build next episode URL
-                item_info = json.loads(params["item_info"])
-                tv_data = item_info.get("tv_data", {})
-                current_episode = tv_data.get("episode")
-                season = tv_data.get("season")
-
-                if current_episode is None or season is None:
-                    return
-
-                next_episode = current_episode + 1
-
-                # Check autoscrape cache for fast path
-                ids = item_info.get("ids", {})
-                id_value = ids.get("original_id") or ids.get("imdb_id") or ids.get("tmdb_id")
-                if id_value is not None:
-                    from lib.utils.player.utils import get_autoscrape_cache_key
-                    cache_key = get_autoscrape_cache_key(id_value, season, next_episode)
-                    cached_data = cache.get(cache_key)
-                    if cached_data:
-                        PLAYLIST.clear()
-                        jack_player = JacktookPLayer()
-                        jack_player.run(data=cached_data)
-                        del jack_player
-                        return
-
-                next_tv_data = {
-                    "episode": next_episode,
-                    "season": season,
-                }
-
-                next_url = build_url(
-                    "search",
-                    mode=item_info.get("mode"),
-                    query=item_info.get("title"),
-                    ids=ids,
-                    tv_data=next_tv_data,
-                    rescrape=True,
+            else:
+                kodilog(
+                    "[PLAYNEXT] Ignoring next action without playback session"
                 )
-
-                # Clear playlist to prevent "out of range" crash when video ends
-                PLAYLIST.clear()
-
-                # Play directly
-                from xbmcgui import ListItem
-
-                list_item = ListItem(path=next_url)
-                player.play(next_url, list_item)
 
 
 def run_resume_dialog(params):
@@ -329,8 +308,6 @@ def search_status_mock():
         manager.submit_task("Stremio", "stremio", dummy_task, 8, False, 20)
         manager.submit_task("Prowlarr", "prowlarr", dummy_task, 4, True, 0)
 
-        window = SearchStatusWindow(
-            "search_status.xml", ADDON_PATH, task_manager=manager
-        )
+        window = SearchStatusWindow("search_status.xml", ADDON_PATH, task_manager=manager)
         window.doModal()
         del window

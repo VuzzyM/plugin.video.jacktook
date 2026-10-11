@@ -34,10 +34,10 @@ class Discover(TMDb):
         current_date, future_date = get_dates(7, reverse=False)
         params = (
             "&with_original_language=en"
-            "&air_date.gte=%s"
-            "&air_date.lte=%s"
-            "&with_networks=%s"
-            "&page=%s" % (current_date, future_date, network_ids, page)
+            f"&air_date.gte={current_date}"
+            f"&air_date.lte={future_date}"
+            f"&with_networks={network_ids}"
+            f"&page={page}"
         )
         return self._request_obj(
             self._urls["tv"],
